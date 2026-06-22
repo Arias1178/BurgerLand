@@ -47,7 +47,7 @@ class Usuario(Base):
     correo = Column(String, unique=True, index=True, nullable=False)
     contraseña = Column(String, nullable=False)
     id_rol = Column(Integer, ForeignKey("rol.id_rol"), index=True)
-    id_estado = Column(Integer, ForeignKey("estados_usuarios.id_estado"), index=True)
+    id_estado = Column(Integer, ForeignKey("estado_usuarios.id_estado"), index=True)
 
 class categorias(Base):
     __tablename__= "categorias"
@@ -106,7 +106,7 @@ class ventas(Base):
     total     = Column(Float, nullable=False)
     id_estado_ventas  = Column(Integer, ForeignKey("estado_ventas.id_estado_venta"), index=True)
     id_caja  = Column(Integer, ForeignKey("caja.id_caja"), index=True) 
-    id_usuario = Column(Integer, ForeignKey("usuario.id_usuario"), index=True)
+    id_usuario = Column(Integer, ForeignKey("usuarios.id_usuario"), index=True)
     id_metodos_pagos = Column(Integer, ForeignKey("metodos_pago.id_metodos_pago"), index=True) 
 
 class estado_ventas(Base):
