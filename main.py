@@ -17,18 +17,20 @@ async def main(page: ft.Page):
 
     page.horizontal_alignment = "center"
     page.vertical_alignment = "center"
-    page.bgcolor = "#F0F2F5"
+    page.bgcolor = "#FFFFFFFF"
 
     # INTERFAZ
     txt_username = ft.TextField(
         label="Escribe tu Usuario aquí",
-        width=300
+        width=300,
+        color="black"
     )
 
     txt_password = ft.TextField(
         label="Escribe tu Contraseña aquí",
         password=True,
-        width=300
+        width=300,
+        color="black"
     )
 
     lbl_error = ft.Text(
@@ -37,7 +39,78 @@ async def main(page: ft.Page):
         weight="bold"
     )
 
-    # ACCIÓN DEL BOTÓN
+    def show_login_page():
+        page.title = "Sistema de Créditos y Cobranza"
+        page.controls.clear()
+        page.add(
+            ft.Text("INGRESO AL SISTEMA", size=24, weight="bold", color="blue"),
+            txt_username,
+            txt_password,
+            lbl_error,
+            ft.ElevatedButton(
+                "Iniciar Sesión",
+                width=300,
+                bgcolor="blue",
+                color="white",
+                on_click=btn_login_click
+            )
+        )
+        page.update()
+
+    def show_admin_page():
+        page.title = "Bienvenidos a Burguer Land"
+        page.controls.clear()
+        page.add(
+            ft.Column(
+                spacing=30,
+                horizontal_alignment="center",
+                controls=[
+                    ft.Container(
+                        width=1000,
+                        padding=ft.padding.Padding(top=20, bottom=20),
+                        alignment=ft.Alignment.TOP_CENTER,
+                        content=ft.Text(
+                            "Bienvenidos a Burguer Land",
+                            size=36,
+                            weight="bold",
+                            color="blue"
+                        )
+                    ),
+                    ft.Column(
+                        expand=True,
+                        alignment="center",
+                        horizontal_alignment="center",
+                        spacing=20,
+                        controls=[
+                            ft.Row(
+                                alignment="center",
+                                spacing=20,
+                                controls=[
+                                    ft.ElevatedButton("Inventario", width=180, height=60),
+                                    ft.ElevatedButton("Menú", width=180, height=60),
+                                    ft.ElevatedButton("Ventas", width=180, height=60)
+                                ]
+                            ),
+                            ft.Row(
+                                alignment="center",
+                                spacing=20,
+                                controls=[
+                                    ft.ElevatedButton("Historial", width=180, height=60),
+                                    ft.ElevatedButton("Reportes", width=180, height=60)
+                                ]
+                            )
+                        ]
+                    ),
+                    ft.ElevatedButton(
+                        "Cerrar sesión",
+                        width=200,
+                        on_click=lambda e: show_login_page()
+                    )
+                ]
+            )
+        )
+        page.update()
+
     async def btn_login_click(e):
         lbl_error.value = ""
 
@@ -47,32 +120,12 @@ async def main(page: ft.Page):
             return
 
         if txt_username.value == "admin" and txt_password.value == "admin123":
-            page.controls.clear()
-            page.add(
-                ft.Text("¡INICIO DE SESIÓN EXITOSO!", size=30, color="green", weight="bold"),
-                ft.Text("Bienvenido al panel principal.", size=18)
-            )
+            show_admin_page()
         else:
             lbl_error.value = "Usuario o contraseña incorrectos."
+            page.update()
 
-        page.update()
-
-    btn_login = ft.Button(
-        content=ft.Text("Iniciar Sesión", color="white"),
-        bgcolor="blue",
-        width=300,
-        on_click=btn_login_click
-    )
-
-    page.add(
-        ft.Text("INGRESO AL SISTEMA", size=24, weight="bold", color="black"),
-        txt_username,
-        txt_password,
-        lbl_error, 
-        btn_login
-    )
-
-    page.update()
+    show_login_page()
 
 if __name__ == "__main__":
     ft.run(main)
