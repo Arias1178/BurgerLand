@@ -66,6 +66,21 @@ def init_db():
         )
         db.add(admin)
         db.commit()
+    
+    # buscar rol vendedor y estado activo
+    rol_vendedor = db.query(rol).filter(rol.nombre == "VENDEDOR").first()
+
+# crear usuario vendedor
+    if not db.query(Usuario).filter(Usuario.correo == "vendedor@burgerland.com").first():
+        vendedor = Usuario(
+            nombre="Vendedor1",
+            correo="vendedor@burgerland.com",
+            contraseña=hash_password("vendedor123"),
+            id_rol=rol_vendedor.id_rol,
+            id_estado=estado_activo.id_estado
+        )
+        db.add(vendedor)
+        db.commit()
 
     db.close()
     print("Base de datos creada exitosamente")
