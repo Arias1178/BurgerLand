@@ -2,10 +2,29 @@ import flet as ft
 from database.database import SessionLocal
 from database.models import productos, categorias, metodos_pago, ventas, detalle_ventas
 
-def nueva_venta_view(page: ft.Page, navbar, usuario_actual, on_venta_completada):
+def nueva_venta_view(page: ft.Page, navbar, usuario_actual, on_venta_completada, caja_actual=None):
     db = SessionLocal()
     lista_categorias = db.query(categorias).all()
     lista_metodos = db.query(metodos_pago).all()
+
+    if caja_actual is None:
+        db.close()
+        return ft.Column(
+            controls=[
+                navbar,
+                ft.Container(
+                    padding=30,
+                    bgcolor="#3A3F52",
+                    border_radius=20,
+                    content=ft.Column(
+                        controls=[
+                            ft.Text("Debe abrir caja antes de registrar ventas.", size=22, weight="bold", color="white"),
+                            ft.TextButton("Volver al inicio", on_click=lambda e: on_venta_completada()),
+                        ]
+                    ),
+                ),
+            ]
+        )
 
     carrito = []  # lista de dicts: {id_producto, nombre, precio, cantidad}
     metodo_seleccionado = {"id": lista_metodos[0].id_metodos_pago if lista_metodos else None,
@@ -175,7 +194,8 @@ def nueva_venta_view(page: ft.Page, navbar, usuario_actual, on_venta_completada)
             total=total,
             id_metodos_pagos=metodo_seleccionado["id"],
             id_usuario=usuario_actual.id_usuario if usuario_actual else None,
-            id_caja=None  # se conecta cuando esté lista la gestión de caja
+            id_caja=caja_actual.id_caja if caja_actual else None,
+            id_estado_ventas=1
         )
         db.add(nueva_venta)
         db.commit()
