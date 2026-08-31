@@ -4,16 +4,15 @@ import flet as ft
 
 def inicio_view(page: ft.Page, navbar, usuario_actual=None, caja_actual=None, on_abrir_caja=None, on_cerrar_caja=None, on_refrescar=None):
     saldo_inicial_field = ft.TextField(
-        label="Saldo inicial en caja",
         value="0",
         width=420,
         height=60,
+        hint_text="Ingresa el saldo inicial",
         bgcolor="#DDE2EA",
         color="#111111",
         border_radius=12,
         border_color="transparent",
         text_style=ft.TextStyle(size=18, color="#111111"),
-        label_style=ft.TextStyle(size=15, color="#E6EAF2", weight="w500"),
         content_padding=ft.Padding(left=16, right=16, top=18, bottom=12),
         keyboard_type=ft.KeyboardType.NUMBER,
     )
@@ -152,4 +151,12 @@ def inicio_view(page: ft.Page, navbar, usuario_actual=None, caja_actual=None, on
         ),
     )
 
-    return ft.Column(expand=True, spacing=20, controls=[navbar, tarjeta])
+    return ft.Column(
+        expand=True,
+        spacing=20,
+        scroll="auto",
+        controls=[
+            navbar,
+            ft.Container(margin=ft.Margin(top=8), content=tarjeta),
+        ],
+    )

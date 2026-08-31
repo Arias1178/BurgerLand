@@ -55,14 +55,18 @@ class categorias(Base):
     id_categoria = Column(Integer, primary_key=True, index=True)
     nombre = Column (String, nullable=False)
     descripcion = Column (String, nullable=True)
+    estado = Column(String, nullable=False, default="ACTIVO")
 
 class proveedores(Base):
     __tablename__ = "proveedores"
 
     id_proveedor = Column(Integer, primary_key=True, index=True)
     nombre = Column(String, nullable=False)
+    que_provee = Column(String, nullable=False, default="")
     telefono = Column(String, nullable=True)
     correo = Column(String, unique=True, index=True, nullable=False)
+    cuanto_cobra = Column(Float, nullable=False, default=0)
+    estado = Column(String, nullable=False, default="ACTIVO")
 
 class productos(Base):
     __tablename__ = "productos"
@@ -108,6 +112,9 @@ class ventas(Base):
     id_caja  = Column(Integer, ForeignKey("caja.id_caja"), index=True) 
     id_usuario = Column(Integer, ForeignKey("usuarios.id_usuario"), index=True)
     id_metodos_pagos = Column(Integer, ForeignKey("metodos_pago.id_metodos_pago"), index=True) 
+    id_proveedor = Column(Integer, ForeignKey("proveedores.id_proveedor"), index=True, nullable=True)
+    proveedores_texto = Column(String, nullable=True)
+    costo_proveedor = Column(Float, nullable=False, default=0)
 
 class estado_ventas(Base):
     __tablename__="estado_ventas"
@@ -154,8 +161,23 @@ class informes(Base):
     total_efectivo = Column(Float, nullable=False)
     total_tarjeta = Column(Float, nullable=False)
     total_nequi = Column(Float, nullable=False)
+    total_proveedores = Column(Float, nullable=False, default=0)
     saldo_inicial = Column(Float, nullable=False)
     saldo_final = Column(Float, nullable=False)
     id_caja = Column(Integer, ForeignKey("caja.id_caja"), index=True)
     id_usuario = Column(Integer, ForeignKey("usuarios.id_usuario"), index=True)     
 
+
+class inventario(Base):
+    __tablename__ = "inventario"
+
+    id_inventario = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String, nullable=False, index=True)
+    categoria = Column(String, nullable=False)
+    unidad_medida = Column(String, nullable=False)
+    cantidad = Column(Float, nullable=False, default=0)
+    stock_minimo = Column(Float, nullable=False, default=0)
+    costo_unitario = Column(Float, nullable=False, default=0)
+    estado = Column(String, nullable=False, default="ACTIVO")
+    fecha_creacion = Column(DateTime, nullable=False, default=datetime.datetime.now)
+    fecha_actualizacion = Column(DateTime, nullable=False, default=datetime.datetime.now, onupdate=datetime.datetime.now)

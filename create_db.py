@@ -1,12 +1,30 @@
 from database.database import engine, Base
-from database.models import Usuario, rol, estado_usuarios, estados_productos , estados_caja , metodos_pago , estado_ventas, categorias, productos
+from database.models import Usuario, rol, estado_usuarios, estados_productos , estados_caja , metodos_pago , estado_ventas, categorias, productos, inventario, proveedores
 from services.auth_service import hash_password
 from database.database import SessionLocal
+from sqlalchemy import text
+
+
+def _asegurar_columna(db, tabla, columna, definicion_sql):
+    columnas = db.execute(text(f"PRAGMA table_info({tabla})")).fetchall()
+    nombres = [fila[1] for fila in columnas]
+    if columna not in nombres:
+        db.execute(text(f"ALTER TABLE {tabla} ADD COLUMN {definicion_sql}"))
+        db.commit()
 
 def init_db():
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
+
+    _asegurar_columna(db, "categorias", "estado", "estado VARCHAR NOT NULL DEFAULT 'ACTIVO'")
+    _asegurar_columna(db, "proveedores", "que_provee", "que_provee VARCHAR NOT NULL DEFAULT ''")
+    _asegurar_columna(db, "proveedores", "cuanto_cobra", "cuanto_cobra FLOAT NOT NULL DEFAULT 0")
+    _asegurar_columna(db, "proveedores", "estado", "estado VARCHAR NOT NULL DEFAULT 'ACTIVO'")
+    _asegurar_columna(db, "ventas", "id_proveedor", "id_proveedor INTEGER")
+    _asegurar_columna(db, "ventas", "proveedores_texto", "proveedores_texto VARCHAR")
+    _asegurar_columna(db, "ventas", "costo_proveedor", "costo_proveedor FLOAT NOT NULL DEFAULT 0")
+    _asegurar_columna(db, "informes", "total_proveedores", "total_proveedores FLOAT NOT NULL DEFAULT 0")
 
     # crear roles
     roles = ["ADMIN", "VENDEDOR", "CAJERO"]
@@ -26,7 +44,7 @@ def init_db():
     nombres_categorias = ["Burgers", "Hot Dogs", "Fast Food", "Bebidas Frías", "Bebidas Calientes", "Adiciones"]
     for nombre in nombres_categorias:
         if not db.query(categorias).filter(categorias.nombre == nombre).first():
-            db.add(categorias(nombre=nombre))
+            db.add(categorias(nombre=nombre, estado="ACTIVO"))
     db.commit()
 
     from database.models import productos
@@ -205,4 +223,3 @@ def init_db():
 
 if __name__ == "__main__":
     init_db()
-

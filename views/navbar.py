@@ -1,6 +1,6 @@
 import flet as ft
 
-def construir_navbar(page, activo, mostrar_inicio, mostrar_venta, mostrar_historial, mostrar_menu, mostrar_inventario, mostrar_informes):
+def construir_navbar(page, activo, mostrar_inicio, mostrar_venta, mostrar_historial, mostrar_menu, mostrar_inventario, mostrar_proveedores, mostrar_informes):
 
     def boton_nav(texto, clave, accion):
         es_activo = activo == clave
@@ -28,6 +28,7 @@ def construir_navbar(page, activo, mostrar_inicio, mostrar_venta, mostrar_histor
                 boton_nav("Historial", "historial", mostrar_historial),
                 boton_nav("Menu", "menu", mostrar_menu),
                 boton_nav("Inventario", "inventario", mostrar_inventario),
+                boton_nav("Proveedores", "proveedores", mostrar_proveedores),
                 boton_nav("Informes", "informes", mostrar_informes),
             ]
         )

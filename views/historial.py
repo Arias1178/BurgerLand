@@ -1,5 +1,7 @@
 import datetime
+
 import flet as ft
+
 from database.database import SessionLocal
 from database.models import ventas, detalle_ventas, productos, metodos_pago, Usuario
 
@@ -14,45 +16,89 @@ def obtener_productos_texto(db, id_venta):
     return ", ".join(partes) if partes else "-"
 
 
-def _crear_tabla_ventas(ventas_lista, db):
-    filas = []
-    for v in ventas_lista:
-        metodo = db.query(metodos_pago).filter(metodos_pago.id_metodos_pago == v.id_metodos_pagos).first()
-        nombre_metodo = metodo.nombre if metodo else "-"
+def _badge(texto, color):
+    return ft.Container(
+        padding=ft.Padding(left=10, right=10, top=4, bottom=4),
+        border_radius=999,
+        bgcolor=color,
+        content=ft.Text(texto, color="white", size=12, weight="bold"),
+    )
 
-        usuario = db.query(Usuario).filter(Usuario.id_usuario == v.id_usuario).first()
-        nombre_usuario = usuario.nombre if usuario else "-"
 
-        productos_texto = obtener_productos_texto(db, v.id_venta)
+def _crear_tarjeta_venta(db, venta):
+    metodo = db.query(metodos_pago).filter(metodos_pago.id_metodos_pago == venta.id_metodos_pagos).first()
+    usuario = db.query(Usuario).filter(Usuario.id_usuario == venta.id_usuario).first()
+    productos_texto = obtener_productos_texto(db, venta.id_venta)
 
-        filas.append(
-            ft.DataRow(cells=[
-                ft.DataCell(ft.Text(v.fecha_hora.strftime("%d/%m/%Y"), color="white")),
-                ft.DataCell(ft.Text(v.fecha_hora.strftime("%H:%M"), color="white")),
-                ft.DataCell(ft.Text(nombre_usuario, color="white")),
-                ft.DataCell(ft.Text(f"${v.total:,.0f}".replace(",", "."), color="white")),
-                ft.DataCell(ft.Text(nombre_metodo, color="white")),
-                ft.DataCell(ft.Text(productos_texto, color="white")),
-            ])
+    return ft.Container(
+        border_radius=16,
+        padding=16,
+        bgcolor="#2E3344",
+        border=ft.Border(
+            left=ft.BorderSide(1, "#5A5F72"),
+            right=ft.BorderSide(1, "#5A5F72"),
+            top=ft.BorderSide(1, "#5A5F72"),
+            bottom=ft.BorderSide(1, "#5A5F72"),
+        ),
+        content=ft.Column(
+            spacing=10,
+            controls=[
+                ft.Row(
+                    alignment="spaceBetween",
+                    controls=[
+                        ft.Column(
+                            spacing=2,
+                            controls=[
+                                ft.Text(
+                                    venta.fecha_hora.strftime("%d/%m/%Y"),
+                                    color="white",
+                                    size=13,
+                                    weight="bold",
+                                ),
+                                ft.Text(
+                                    venta.fecha_hora.strftime("%H:%M"),
+                                    color="#C9CEDB",
+                                    size=12,
+                                ),
+                            ],
+                        ),
+                        _badge(f"${venta.total:,.0f}".replace(",", "."), "#F2C744"),
+                    ],
+                ),
+                ft.Row(
+                    wrap=True,
+                    spacing=8,
+                    run_spacing=8,
+                    controls=[
+                        _badge(usuario.nombre if usuario else "Sin usuario", "#5A5F72"),
+                        _badge(metodo.nombre if metodo else "Sin pago", "#7ABAFB"),
+                    ],
+                ),
+                ft.Text(
+                    productos_texto,
+                    color="#E3E7F1",
+                    size=13,
+                    max_lines=2,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                ),
+            ],
+        ),
+    )
+
+
+def _crear_lista_ventas(ventas_lista, db):
+    if not ventas_lista:
+        return ft.Container(
+            padding=20,
+            alignment=ft.Alignment(0, 0),
+            content=ft.Text("No hay registros para mostrar.", color="white"),
         )
 
-    if not filas:
-        return ft.Text("No hay ventas registradas.", color="white")
-
-    tabla = ft.DataTable(
-        border_radius=10,
-        column_spacing=28,
-        columns=[
-            ft.DataColumn(ft.Text("Fecha", color="white", weight="bold")),
-            ft.DataColumn(ft.Text("Hora", color="white", weight="bold")),
-            ft.DataColumn(ft.Text("Usuario", color="white", weight="bold")),
-            ft.DataColumn(ft.Text("Total", color="white", weight="bold")),
-            ft.DataColumn(ft.Text("Pago", color="white", weight="bold")),
-            ft.DataColumn(ft.Text("Productos", color="white", weight="bold")),
-        ],
-        rows=filas,
+    return ft.Column(
+        spacing=12,
+        scroll="auto",
+        controls=[_crear_tarjeta_venta(db, venta) for venta in ventas_lista],
     )
-    return ft.Column(expand=True, scroll="auto", controls=[tabla])
 
 
 def historial_view(page: ft.Page, navbar):
@@ -62,12 +108,11 @@ def historial_view(page: ft.Page, navbar):
     ventas_hoy = [v for v in todas_ventas if v.fecha_hora.date() == hoy]
     ventas_historicas = [v for v in todas_ventas if v.fecha_hora.date() != hoy]
 
-    bloque_hoy = _crear_tabla_ventas(ventas_hoy, db)
-    bloque_historicas = _crear_tabla_ventas(ventas_historicas, db)
-
     total_hoy = sum(v.total for v in ventas_hoy)
     total_historicas = sum(v.total for v in ventas_historicas)
 
+    bloque_hoy = _crear_lista_ventas(ventas_hoy, db)
+    bloque_historicas = _crear_lista_ventas(ventas_historicas, db)
     db.close()
 
     panel_hoy = ft.Container(
@@ -75,13 +120,18 @@ def historial_view(page: ft.Page, navbar):
         border_radius=18,
         padding=20,
         content=ft.Column(
-            spacing=8,
+            spacing=10,
             controls=[
-                ft.Text("Ventas del día", size=20, weight="bold", color="#F2C744"),
-                ft.Text(f"Total: ${total_hoy:,.0f}".replace(",", "."), size=16, color="white", weight="bold"),
+                ft.Row(
+                    alignment="spaceBetween",
+                    controls=[
+                        ft.Text("Ventas del día", size=20, weight="bold", color="#F2C744"),
+                        _badge(f"Total: ${total_hoy:,.0f}".replace(",", "."), "#7AE582"),
+                    ],
+                ),
                 ft.Container(
-                    height=260,
-                    content=ft.Column(scroll="auto", expand=True, controls=[bloque_hoy]),
+                    height=300,
+                    content=bloque_hoy,
                 ),
             ],
         ),
@@ -101,13 +151,18 @@ def historial_view(page: ft.Page, navbar):
         border_radius=18,
         padding=20,
         content=ft.Column(
-            spacing=8,
+            spacing=10,
             controls=[
-                ft.Text("Ventas históricas", size=20, weight="bold", color="#7AE582"),
-                ft.Text(f"Total: ${total_historicas:,.0f}".replace(",", "."), size=16, color="white", weight="bold"),
+                ft.Row(
+                    alignment="spaceBetween",
+                    controls=[
+                        ft.Text("Ventas históricas", size=20, weight="bold", color="#7AE582"),
+                        _badge(f"Total: ${total_historicas:,.0f}".replace(",", "."), "#7ABAFB"),
+                    ],
+                ),
                 ft.Container(
-                    height=260,
-                    content=ft.Column(scroll="auto", expand=True, controls=[bloque_historicas]),
+                    height=300,
+                    content=bloque_historicas,
                 ),
             ],
         ),
@@ -128,8 +183,15 @@ def historial_view(page: ft.Page, navbar):
         content=ft.Column(
             expand=True,
             spacing=20,
+            scroll="auto",
             controls=[
-                ft.Text("HISTORIAL DE VENTAS", size=22, weight="bold", color="white"),
+                ft.Row(
+                    alignment="spaceBetween",
+                    controls=[
+                        ft.Text("HISTORIAL DE VENTAS", size=22, weight="bold", color="white"),
+                        _badge("Registros ordenados", "#5A5F72"),
+                    ],
+                ),
                 panel_hoy,
                 btn_historico,
                 panel_historico,
@@ -137,4 +199,4 @@ def historial_view(page: ft.Page, navbar):
         ),
     )
 
-    return ft.Column(expand=True, spacing=20, controls=[navbar, tarjeta])
+    return ft.Column(expand=True, spacing=20, scroll="auto", controls=[navbar, tarjeta])

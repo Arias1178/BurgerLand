@@ -2,6 +2,7 @@ import ssl
 import certifi
 import os
 import datetime
+from types import SimpleNamespace
 from sqlalchemy import func
 
 os.environ["FLET_RENDERER"] = "software"
@@ -19,6 +20,7 @@ from views.navbar import construir_navbar
 from views.historial import historial_view
 from views.menu import menu_view
 from views.inventario import inventario_view
+from views.proveedores import proveedores_view
 from views.informes import informes_view
 from views.nueva_venta_view import nueva_venta_view
 
@@ -96,24 +98,22 @@ def cerrar_caja(usuario):
     metodo_tarjeta = db.query(metodos_pago).filter(metodos_pago.nombre == "TARJETA").first()
     metodo_nequi = db.query(metodos_pago).filter(metodos_pago.nombre == "NEQUI").first()
 
+    def total_por_metodo(metodo):
+        if not metodo:
+            return 0
+        return db.query(func.coalesce(func.sum(ventas.total), 0)).filter(
+            ventas.id_caja == caja_actual.id_caja,
+            ventas.id_metodos_pagos == metodo.id_metodos_pago,
+        ).scalar() or 0
+
     ventas_totales = db.query(func.coalesce(func.sum(ventas.total), 0)).filter(ventas.id_caja == caja_actual.id_caja).scalar() or 0
-    total_efectivo = db.query(func.coalesce(func.sum(ventas.total), 0)).filter(
-        ventas.id_caja == caja_actual.id_caja,
-        ventas.id_metodos_pagos == metodo_efectivo.id_metodos_pago if metodo_efectivo else None,
-    ).scalar() or 0
-    total_tarjeta = db.query(func.coalesce(func.sum(ventas.total), 0)).filter(
-        ventas.id_caja == caja_actual.id_caja,
-        ventas.id_metodos_pagos == metodo_tarjeta.id_metodos_pago if metodo_tarjeta else None,
-    ).scalar() or 0
-    total_nequi = db.query(func.coalesce(func.sum(ventas.total), 0)).filter(
-        ventas.id_caja == caja_actual.id_caja,
-        ventas.id_metodos_pagos == metodo_nequi.id_metodos_pago if metodo_nequi else None,
-    ).scalar() or 0
+    total_efectivo = total_por_metodo(metodo_efectivo)
+    total_tarjeta = total_por_metodo(metodo_tarjeta)
+    total_nequi = total_por_metodo(metodo_nequi)
+    total_proveedores = db.query(func.coalesce(func.sum(ventas.costo_proveedor), 0)).filter(ventas.id_caja == caja_actual.id_caja).scalar() or 0
     productos_vendidos = db.query(func.coalesce(func.sum(detalle_ventas.cantidad), 0)).join(
         ventas, detalle_ventas.id_venta == ventas.id_venta
     ).filter(ventas.id_caja == caja_actual.id_caja).scalar() or 0
-    clientes_atendidos = db.query(ventas).filter(ventas.id_caja == caja_actual.id_caja).count()
-
     caja_actual.fecha_cierre = datetime.datetime.now()
     caja_actual.saldo_final = caja_actual.saldo_inicial + total_efectivo
     caja_actual.id_estado_caja = estado_cerrada.id_estado_caja
@@ -122,10 +122,11 @@ def cerrar_caja(usuario):
         fecha=datetime.date.today(),
         ventas_totales=float(ventas_totales),
         productos_vendidos=int(productos_vendidos),
-        clientes_atendidos=int(clientes_atendidos),
+        clientes_atendidos=0,
         total_efectivo=float(total_efectivo),
         total_tarjeta=float(total_tarjeta),
         total_nequi=float(total_nequi),
+        total_proveedores=float(total_proveedores),
         saldo_inicial=float(caja_actual.saldo_inicial),
         saldo_final=float(caja_actual.saldo_final),
         id_caja=caja_actual.id_caja,
@@ -141,10 +142,10 @@ def cerrar_caja(usuario):
         "fecha": informe.fecha,
         "ventas_totales": float(informe.ventas_totales),
         "productos_vendidos": int(informe.productos_vendidos),
-        "clientes_atendidos": int(informe.clientes_atendidos),
         "total_efectivo": float(informe.total_efectivo),
         "total_tarjeta": float(informe.total_tarjeta),
         "total_nequi": float(informe.total_nequi),
+        "total_proveedores": float(informe.total_proveedores),
         "saldo_inicial": float(informe.saldo_inicial),
         "saldo_final": float(informe.saldo_final),
         "id_caja": informe.id_caja,
@@ -177,6 +178,7 @@ async def main(page: ft.Page):
             mostrar_historial=lambda: mostrar_historial(),
             mostrar_menu=lambda: mostrar_menu(),
             mostrar_inventario=lambda: mostrar_inventario(),
+            mostrar_proveedores=lambda: mostrar_proveedores(),
             mostrar_informes=lambda: mostrar_informes(),
         )
 
@@ -224,7 +226,13 @@ async def main(page: ft.Page):
         page.horizontal_alignment = "start"
         page.vertical_alignment = "start"
         page.padding = 20
-        navegar(menu_view(page, get_navbar("menu")))
+        navegar(menu_view(page, get_navbar("menu"), usuario_actual=usuario_actual["valor"]))
+
+    def mostrar_proveedores(usuario=None):
+        page.horizontal_alignment = "start"
+        page.vertical_alignment = "start"
+        page.padding = 20
+        navegar(proveedores_view(page, get_navbar("proveedores"), usuario_actual=usuario_actual["valor"]))
 
     def mostrar_inventario(usuario=None):
         page.horizontal_alignment = "start"
@@ -238,6 +246,43 @@ async def main(page: ft.Page):
         page.padding = 20
         db = SessionLocal()
         ultimo_informe = db.query(informes).order_by(informes.id_informe.desc()).first()
+        caja_actual = obtener_caja_abierta(db, usuario_actual["valor"].id_usuario if usuario_actual["valor"] else None)
+        if caja_actual:
+            metodo_efectivo = db.query(metodos_pago).filter(metodos_pago.nombre == "EFECTIVO").first()
+            metodo_tarjeta = db.query(metodos_pago).filter(metodos_pago.nombre == "TARJETA").first()
+            metodo_nequi = db.query(metodos_pago).filter(metodos_pago.nombre == "NEQUI").first()
+
+            def total_por_metodo(metodo):
+                if not metodo:
+                    return 0
+                return db.query(func.coalesce(func.sum(ventas.total), 0)).filter(
+                    ventas.id_caja == caja_actual.id_caja,
+                    ventas.id_metodos_pagos == metodo.id_metodos_pago,
+                ).scalar() or 0
+
+            ventas_totales = db.query(func.coalesce(func.sum(ventas.total), 0)).filter(ventas.id_caja == caja_actual.id_caja).scalar() or 0
+            total_efectivo = total_por_metodo(metodo_efectivo)
+            total_tarjeta = total_por_metodo(metodo_tarjeta)
+            total_nequi = total_por_metodo(metodo_nequi)
+            total_proveedores = db.query(func.coalesce(func.sum(ventas.costo_proveedor), 0)).filter(ventas.id_caja == caja_actual.id_caja).scalar() or 0
+            productos_vendidos = db.query(func.coalesce(func.sum(detalle_ventas.cantidad), 0)).join(
+                ventas, detalle_ventas.id_venta == ventas.id_venta
+            ).filter(ventas.id_caja == caja_actual.id_caja).scalar() or 0
+            clientes_atendidos = db.query(ventas).filter(ventas.id_caja == caja_actual.id_caja).count()
+            ultimo_informe = SimpleNamespace(
+                fecha=datetime.date.today(),
+                ventas_totales=float(ventas_totales),
+                productos_vendidos=int(productos_vendidos),
+                clientes_atendidos=int(clientes_atendidos),
+                total_efectivo=float(total_efectivo),
+                total_tarjeta=float(total_tarjeta),
+                total_nequi=float(total_nequi),
+                total_proveedores=float(total_proveedores),
+                saldo_inicial=float(caja_actual.saldo_inicial),
+                saldo_final=float(caja_actual.saldo_inicial + total_efectivo),
+                id_caja=caja_actual.id_caja,
+                id_usuario=caja_actual.id_usuario,
+            )
         db.close()
         navegar(informes_view(page, get_navbar("informes"), ultimo_informe=ultimo_informe))
 
