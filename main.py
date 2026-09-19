@@ -12,7 +12,7 @@ os.environ["SSL_CERT_FILE"] = certifi.where()
 import flet as ft
 from create_db import init_db
 from database.database import SessionLocal
-from database.models import caja, estados_caja, ventas, detalle_ventas, metodos_pago, informes
+from database.models import caja, estados_caja, ventas, detalle_ventas, metodos_pago, informes, rol
 from views.login import login_view
 from views.inicio import inicio_view
 from views.venta import venta_view
@@ -23,6 +23,8 @@ from views.inventario import inventario_view
 from views.proveedores import proveedores_view
 from views.informes import informes_view
 from views.nueva_venta_view import nueva_venta_view
+from views.contabilidad import contabilidad_view
+from services.contabilidad_service import can_process_accounting, obtener_ultima_caja_cerrada, generar_cierre_contable
 
 usuario_actual = {"valor": None}  # guardamos el usuario logueado aquí
 
@@ -152,6 +154,12 @@ def cerrar_caja(usuario):
         "id_usuario": informe.id_usuario,
     }
 
+    try:
+        cierre = generar_cierre_contable(caja_actual.id_caja)
+        informe_data["cierre_contable_id"] = cierre.id_cierre
+    except Exception:
+        pass
+
     db.close()
     return {"ok": True, "mensaje": "Caja cerrada y reporte generado.", "informe": informe_data}
 
@@ -169,7 +177,25 @@ async def main(page: ft.Page):
         page.add(vista)
         page.update()
 
+    def usuario_es_admin():
+        usuario = usuario_actual["valor"]
+        if not usuario:
+            return False
+        db = SessionLocal()
+        try:
+            perfil = db.query(rol).filter(rol.id_rol == usuario.id_rol).first()
+            return bool(perfil and perfil.nombre == "ADMIN")
+        finally:
+            db.close()
+
     def get_navbar(activo):
+        db = SessionLocal()
+        try:
+            estado_cerrada = obtener_estado_caja(db, "CERRADA")
+            hay_cierre = bool(estado_cerrada and db.query(caja).filter(caja.id_estado_caja == estado_cerrada.id_estado_caja).count() > 0)
+            contabilidad_habilitada = usuario_es_admin() or hay_cierre
+        finally:
+            db.close()
         return construir_navbar(
             page,
             activo=activo,
@@ -180,7 +206,22 @@ async def main(page: ft.Page):
             mostrar_inventario=lambda: mostrar_inventario(),
             mostrar_proveedores=lambda: mostrar_proveedores(),
             mostrar_informes=lambda: mostrar_informes(),
+            mostrar_contabilidad=lambda: mostrar_contabilidad(),
+            contabilidad_habilitada=contabilidad_habilitada,
         )
+
+    def obtener_caja_para_contabilidad(usuario_id):
+        """
+        Determina la caja de referencia para Operatividad Contable:
+        primero la caja abierta actual (para poder informar por qué está
+        bloqueada), y si no existe, la última caja cerrada del usuario.
+        """
+        db = SessionLocal()
+        caja_abierta = obtener_caja_abierta(db, usuario_id)
+        db.close()
+        if caja_abierta:
+            return caja_abierta
+        return obtener_ultima_caja_cerrada(usuario_id)
 
     def cargar_caja_actual():
         db = SessionLocal()
@@ -238,7 +279,7 @@ async def main(page: ft.Page):
         page.horizontal_alignment = "start"
         page.vertical_alignment = "start"
         page.padding = 20
-        navegar(inventario_view(page, get_navbar("inventario")))
+        navegar(inventario_view(page, get_navbar("inventario"), usuario_actual=usuario_actual["valor"]))
 
     def mostrar_informes(usuario=None):
         page.horizontal_alignment = "start"
@@ -291,6 +332,30 @@ async def main(page: ft.Page):
         page.vertical_alignment = "start"
         page.padding = 20
         navegar(historial_view(page, get_navbar("historial")))
+
+    def mostrar_contabilidad(usuario=None):
+        """
+        Muestra la vista de Operatividad Contable.
+
+        Se resuelve la caja de referencia (abierta o última cerrada) del
+        usuario y se delega en la vista/servicio la validación real de
+        si el procesamiento contable puede habilitarse. Si el usuario
+        llega aquí con la caja abierta, la vista mostrará el mensaje
+        informativo de bloqueo en lugar del formulario.
+        """
+        if not usuario_es_admin():
+            return mostrar_inicio()
+        page.horizontal_alignment = "start"
+        page.vertical_alignment = "start"
+        page.padding = 20
+        usuario_id = usuario_actual["valor"].id_usuario if usuario_actual["valor"] else None
+        caja_referencia = obtener_caja_para_contabilidad(usuario_id)
+        navegar(contabilidad_view(
+            page,
+            get_navbar("contabilidad"),
+            usuario_actual=usuario_actual["valor"],
+            caja_actual=caja_referencia,
+        ))
 
     def mostrar_login():
         page.horizontal_alignment = "center"

@@ -338,12 +338,7 @@ def nueva_venta_view(page: ft.Page, navbar, usuario_actual, on_venta_completada,
 
     actualizar_proveedores_resumen()
 
-    def confirmar_venta(e):
-        if not carrito and not proveedores_seleccionados:
-            mensaje_venta_text.value = "Agrega productos o selecciona al menos un proveedor."
-            page.update()
-            return
-
+    def ejecutar_venta():
         total = sum(item["precio"] * item["cantidad"] for item in carrito)
         total_proveedores = sum(item["costo"] for item in proveedores_seleccionados)
         id_proveedor = proveedores_seleccionados[0]["id"] if len(proveedores_seleccionados) == 1 else None
@@ -382,6 +377,49 @@ def nueva_venta_view(page: ft.Page, navbar, usuario_actual, on_venta_completada,
         mensaje_venta_text.value = ""
         db.close()
         on_venta_completada()
+
+    def confirmar_venta(e):
+        if not carrito and not proveedores_seleccionados:
+            mensaje_venta_text.value = "Agrega productos o selecciona al menos un proveedor."
+            page.update()
+            return
+
+        total = sum(item["precio"] * item["cantidad"] for item in carrito)
+        total_proveedores = sum(item["costo"] for item in proveedores_seleccionados)
+
+        def aceptar(_e):
+            page.pop_dialog()
+            ejecutar_venta()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Confirmar venta"),
+            content=ft.Column(
+                tight=True,
+                spacing=8,
+                controls=[
+                    ft.Text(f"Productos en el carrito: {len(carrito)}", color="#C9CEDB"),
+                    ft.Text(f"Total a cobrar: ${total:,.0f}".replace(",", "."), size=18, weight="bold", color="#F2C744"),
+                    ft.Text(f"Método de pago: {metodo_seleccionado.get('nombre', 'No seleccionado')}", color="#C9CEDB"),
+                    (
+                        ft.Text(f"Costo a proveedores: ${total_proveedores:,.0f}".replace(",", "."), color="#FFB86C")
+                        if proveedores_seleccionados
+                        else ft.Text("Sin proveedores asociados a esta venta.", color="#A7AEC2")
+                    ),
+                    ft.Text("¿Deseas confirmar y registrar esta venta?", color="white"),
+                ],
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
+                ft.ElevatedButton(
+                    content="Confirmar venta",
+                    bgcolor="#4A6741",
+                    color="white",
+                    on_click=aceptar,
+                ),
+            ],
+        )
+        page.show_dialog(dialog)
 
     if lista_metodos:
         botones_metodo = ft.Row(

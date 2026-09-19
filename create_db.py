@@ -1,5 +1,9 @@
 from database.database import engine, Base
-from database.models import Usuario, rol, estado_usuarios, estados_productos , estados_caja , metodos_pago , estado_ventas, categorias, productos, inventario, proveedores
+from database.models import (
+    Usuario, rol, estado_usuarios, estados_productos, estados_caja, metodos_pago,
+    estado_ventas, categorias, productos, inventario, proveedores, categorias_gasto,
+    parametros_legales
+)
 from services.auth_service import hash_password
 from database.database import SessionLocal
 from sqlalchemy import text
@@ -17,6 +21,40 @@ def init_db():
 
     db = SessionLocal()
 
+    # Año base para los parámetros legales: actualizar anualmente según normativa.
+    if not db.query(parametros_legales).filter(parametros_legales.anio == 2026).first():
+        db.add(parametros_legales(
+            anio=2026,
+            smlv=1750905,
+            auxilio_transporte=249095,
+            uvt=52374,
+            pct_salud_empleador=0.085,
+            pct_pension_empleador=0.12,
+            pct_arl=0.00522,
+            pct_caja_compensacion=0.04,
+            pct_cesantias=1 / 12,
+            pct_intereses_cesantias=0.12,
+            pct_prima=1 / 12,
+            pct_vacaciones=1 / 24,
+            tarifa_impoconsumo=0.08,
+            tarifa_rst=0.019,
+        ))
+        db.commit()
+
+    for nombre, tipo in [
+        ("Arriendo", "FIJO"),
+        ("Servicios públicos", "FIJO"),
+        ("Nómina", "FIJO"),
+        ("Insumos no alimentarios", "VARIABLE"),
+        ("Comisiones plataformas", "VARIABLE"),
+        ("Mantenimiento", "VARIABLE"),
+        ("Impuestos", "FIJO"),
+        ("Otros", "VARIABLE"),
+    ]:
+        if not db.query(categorias_gasto).filter(categorias_gasto.nombre == nombre).first():
+            db.add(categorias_gasto(nombre=nombre, tipo=tipo))
+    db.commit()
+
     _asegurar_columna(db, "categorias", "estado", "estado VARCHAR NOT NULL DEFAULT 'ACTIVO'")
     _asegurar_columna(db, "proveedores", "que_provee", "que_provee VARCHAR NOT NULL DEFAULT ''")
     _asegurar_columna(db, "proveedores", "cuanto_cobra", "cuanto_cobra FLOAT NOT NULL DEFAULT 0")
@@ -25,6 +63,11 @@ def init_db():
     _asegurar_columna(db, "ventas", "proveedores_texto", "proveedores_texto VARCHAR")
     _asegurar_columna(db, "ventas", "costo_proveedor", "costo_proveedor FLOAT NOT NULL DEFAULT 0")
     _asegurar_columna(db, "informes", "total_proveedores", "total_proveedores FLOAT NOT NULL DEFAULT 0")
+    _asegurar_columna(db, "nomina", "nombre", "nombre VARCHAR NOT NULL DEFAULT 'Empleado'")
+    _asegurar_columna(db, "nomina", "incluido_en_calculo", "incluido_en_calculo BOOLEAN NOT NULL DEFAULT 1")
+    _asegurar_columna(db, "deudas", "nombre", "nombre VARCHAR NOT NULL DEFAULT 'Deuda'")
+    _asegurar_columna(db, "deudas", "incluido_en_calculo", "incluido_en_calculo BOOLEAN NOT NULL DEFAULT 1")
+    _asegurar_columna(db, "servicios_financieros", "incluido_en_calculo", "incluido_en_calculo BOOLEAN NOT NULL DEFAULT 1")
 
     # crear roles
     roles = ["ADMIN", "VENDEDOR", "CAJERO"]

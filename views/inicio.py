@@ -18,7 +18,7 @@ def inicio_view(page: ft.Page, navbar, usuario_actual=None, caja_actual=None, on
     )
     mensaje = ft.Text("", color="#F2C744", size=14)
 
-    def ejecutar_abrir_caja(e):
+    def ejecutar_abrir_caja(_e):
         if not on_abrir_caja:
             return
         resultado = on_abrir_caja(saldo_inicial_field.value)
@@ -31,6 +31,40 @@ def inicio_view(page: ft.Page, navbar, usuario_actual=None, caja_actual=None, on
         page.update()
         if resultado and resultado.get("ok") and on_refrescar:
             on_refrescar()
+
+    def confirmar_abrir_caja(e):
+        try:
+            valor_texto = f"${float(saldo_inicial_field.value or 0):,.0f}".replace(",", ".")
+        except (TypeError, ValueError):
+            valor_texto = saldo_inicial_field.value or "0"
+
+        def aceptar(_e):
+            page.pop_dialog()
+            ejecutar_abrir_caja(_e)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Confirmar apertura de caja"),
+            content=ft.Column(
+                tight=True,
+                spacing=8,
+                controls=[
+                    ft.Text("Saldo inicial a registrar:", color="#C9CEDB"),
+                    ft.Text(valor_texto, size=20, weight="bold", color="#F2C744"),
+                    ft.Text("¿Deseas continuar y abrir la caja con este valor?", color="white"),
+                ],
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
+                ft.ElevatedButton(
+                    content="Abrir caja",
+                    bgcolor="#4A6741",
+                    color="white",
+                    on_click=aceptar,
+                ),
+            ],
+        )
+        page.show_dialog(dialog)
 
     def ejecutar_cerrar_caja(e):
         if not on_cerrar_caja:
@@ -45,6 +79,35 @@ def inicio_view(page: ft.Page, navbar, usuario_actual=None, caja_actual=None, on
         page.update()
         if resultado and resultado.get("ok") and on_refrescar:
             on_refrescar()
+
+    def confirmar_cerrar_caja(e):
+        def aceptar(_e):
+            page.pop_dialog()
+            ejecutar_cerrar_caja(_e)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Confirmar cierre de caja"),
+            content=ft.Column(
+                tight=True,
+                spacing=8,
+                controls=[
+                    ft.Text(f"Saldo inicial: ${caja_actual.saldo_inicial:,.0f}".replace(",", "."), color="#C9CEDB"),
+                    ft.Text("Esta acción cerrará el turno actual y no se podrá deshacer.", color="white"),
+                    ft.Text("¿Deseas continuar y cerrar la caja?", color="white"),
+                ],
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
+                ft.ElevatedButton(
+                    content="Cerrar caja",
+                    bgcolor="#8A3A3A",
+                    color="white",
+                    on_click=aceptar,
+                ),
+            ],
+        )
+        page.show_dialog(dialog)
 
     if caja_actual:
         panel_izquierdo = ft.Container(
@@ -65,7 +128,7 @@ def inicio_view(page: ft.Page, navbar, usuario_actual=None, caja_actual=None, on
                     ft.Button(
                         content=ft.Text("Cerrar Caja", color="white", weight="bold"),
                         bgcolor="#8A3A3A",
-                        on_click=ejecutar_cerrar_caja,
+                        on_click=confirmar_cerrar_caja,
                     ),
                     mensaje,
                 ],
@@ -114,7 +177,7 @@ def inicio_view(page: ft.Page, navbar, usuario_actual=None, caja_actual=None, on
                             content=ft.Text("Abrir Caja", color="white", weight="bold"),
                             bgcolor="#5A5F72",
                             style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=20)),
-                            on_click=ejecutar_abrir_caja,
+                            on_click=confirmar_abrir_caja,
                         ),
                     ),
                     mensaje,

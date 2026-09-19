@@ -1,10 +1,17 @@
 import flet as ft
 
 from database.database import SessionLocal
-from database.models import inventario
+from database.models import inventario, rol
 
 
-def inventario_view(page: ft.Page, navbar):
+def inventario_view(page: ft.Page, navbar, usuario_actual=None):
+    db = SessionLocal()
+    rol_usuario = None
+    if usuario_actual:
+        rol_usuario = db.query(rol).filter(rol.id_rol == usuario_actual.id_rol).first()
+    es_admin = bool(rol_usuario and rol_usuario.nombre == "ADMIN")
+    db.close()
+
     filtro = {"texto": ""}
     tabla_container = ft.Container(expand=True)
 
@@ -120,6 +127,8 @@ def inventario_view(page: ft.Page, navbar):
         page.show_dialog(dialog)
 
     def abrir_ajuste(item):
+        if not es_admin:
+            return
         ajuste = ft.TextField(label="Ajuste de cantidad", value="0")
         mensaje = ft.Text("", color="#FF7B7B", size=12)
 
@@ -177,6 +186,12 @@ def inventario_view(page: ft.Page, navbar):
 
         filas = []
         for item in items:
+            acciones = []
+            if es_admin:
+                acciones = [
+                    ft.TextButton("Editar", on_click=lambda e, it=item: abrir_formulario(it)),
+                    ft.TextButton("Ajustar", on_click=lambda e, it=item: abrir_ajuste(it)),
+                ]
             filas.append(
                 ft.DataRow(
                     cells=[
@@ -195,10 +210,7 @@ def inventario_view(page: ft.Page, navbar):
                         ft.DataCell(
                             ft.Row(
                                 spacing=8,
-                                controls=[
-                                    ft.TextButton("Editar", on_click=lambda e, it=item: abrir_formulario(it)),
-                                    ft.TextButton("Ajustar", on_click=lambda e, it=item: abrir_ajuste(it)),
-                                ],
+                                controls=acciones,
                             )
                         ),
                     ]
@@ -264,7 +276,8 @@ def inventario_view(page: ft.Page, navbar):
                             content=ft.Text("Agregar producto", color="white", weight="bold"),
                             bgcolor="#5A5F72",
                             on_click=lambda e: abrir_formulario(),
-                        ),
+                            visible=es_admin,
+                        ) if es_admin else ft.Container(),
                     ],
                 ),
                 buscador,
