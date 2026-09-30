@@ -1,16 +1,7 @@
-<<<<<<< HEAD
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Date, Enum
-=======
 from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, ForeignKey, Date
->>>>>>> Burguerland_V_1.0
 from sqlalchemy.orm import relationship
 from database.database import Base
 import datetime
-import enum 
-
-class UserRole(enum.Enum):
-    ADMIN = "Administrador"
-    VENDEDOR = "Vendedor"
 
 
 class rol(Base):
@@ -51,11 +42,7 @@ class Usuario(Base):
     correo = Column(String, unique=True, index=True, nullable=False)
     contraseña = Column(String, nullable=False)
     id_rol = Column(Integer, ForeignKey("rol.id_rol"), index=True)
-<<<<<<< HEAD
-    id_estado = Column(Integer, ForeignKey("estados_usuarios.id_estado"), index=True)
-=======
     id_estado = Column(Integer, ForeignKey("estado_usuarios.id_estado"), index=True)
->>>>>>> Burguerland_V_1.0
 
 class categorias(Base):
     __tablename__= "categorias"
@@ -63,26 +50,25 @@ class categorias(Base):
     id_categoria = Column(Integer, primary_key=True, index=True)
     nombre = Column (String, nullable=False)
     descripcion = Column (String, nullable=True)
-<<<<<<< HEAD
-=======
     estado = Column(String, nullable=False, default="ACTIVO")
->>>>>>> Burguerland_V_1.0
 
 class proveedores(Base):
     __tablename__ = "proveedores"
 
     id_proveedor = Column(Integer, primary_key=True, index=True)
     nombre = Column(String, nullable=False)
-<<<<<<< HEAD
-    telefono = Column(String, nullable=True)
-    correo = Column(String, unique=True, index=True, nullable=False)
-=======
     que_provee = Column(String, nullable=False, default="")
     telefono = Column(String, nullable=True)
     correo = Column(String, unique=True, index=True, nullable=False)
     cuanto_cobra = Column(Float, nullable=False, default=0)
     estado = Column(String, nullable=False, default="ACTIVO")
->>>>>>> Burguerland_V_1.0
+
+class categorias_proveedores(Base):
+    __tablename__ = "categorias_proveedores"
+
+    id_categoria_proveedor = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String, unique=True, nullable=False)
+    estado = Column(String, nullable=False, default="ACTIVO")
 
 class productos(Base):
     __tablename__ = "productos"
@@ -95,6 +81,7 @@ class productos(Base):
     id_categoria = Column(Integer, ForeignKey("categorias.id_categoria"), index=True)
     id_estado = Column(Integer, ForeignKey("estados_productos.id_estado_producto"), index=True)
     id_proveedor = Column(Integer, ForeignKey("proveedores.id_proveedor"), index=True)
+    id_inventario = Column(Integer, ForeignKey("inventario.id_inventario"), index=True, nullable=True)
 
 
 class caja(Base):
@@ -126,16 +113,11 @@ class ventas(Base):
     total     = Column(Float, nullable=False)
     id_estado_ventas  = Column(Integer, ForeignKey("estado_ventas.id_estado_venta"), index=True)
     id_caja  = Column(Integer, ForeignKey("caja.id_caja"), index=True) 
-<<<<<<< HEAD
-    id_usuario = Column(Integer, ForeignKey("usuario.id_usuario"), index=True)
-    id_metodos_pagos = Column(Integer, ForeignKey("metodos_pago.id_metodos_pago"), index=True) 
-=======
     id_usuario = Column(Integer, ForeignKey("usuarios.id_usuario"), index=True)
     id_metodos_pagos = Column(Integer, ForeignKey("metodos_pago.id_metodos_pago"), index=True) 
     id_proveedor = Column(Integer, ForeignKey("proveedores.id_proveedor"), index=True, nullable=True)
     proveedores_texto = Column(String, nullable=True)
     costo_proveedor = Column(Float, nullable=False, default=0)
->>>>>>> Burguerland_V_1.0
 
 class estado_ventas(Base):
     __tablename__="estado_ventas"
@@ -169,7 +151,7 @@ class detalles_compras (Base):
     precio = Column(Float, nullable=False)
     subtotal = Column(Float, nullable=False)
     id_compra = Column(Integer, ForeignKey("compras.id_compra"), index=True)
-    id_producto = Column(Integer, ForeignKey("productos.id_producto"), index=True)
+    id_inventario = Column(Integer, ForeignKey("inventario.id_inventario"), index=True)
 
 class informes(Base):
     __tablename__ = "informes"
@@ -182,13 +164,6 @@ class informes(Base):
     total_efectivo = Column(Float, nullable=False)
     total_tarjeta = Column(Float, nullable=False)
     total_nequi = Column(Float, nullable=False)
-<<<<<<< HEAD
-    saldo_inicial = Column(Float, nullable=False)
-    saldo_final = Column(Float, nullable=False)
-    id_caja = Column(Integer, ForeignKey("caja.id_caja"), index=True)
-    id_usuario = Column(Integer, ForeignKey("usuarios.id_usuario"), index=True)     
-
-=======
     total_proveedores = Column(Float, nullable=False, default=0)
     saldo_inicial = Column(Float, nullable=False)
     saldo_final = Column(Float, nullable=False)
@@ -404,8 +379,8 @@ class inventario(Base):
     nombre = Column(String, nullable=False, index=True)
     categoria = Column(String, nullable=False)
     unidad_medida = Column(String, nullable=False)
-    cantidad = Column(Float, nullable=False, default=0)
-    stock_minimo = Column(Float, nullable=False, default=0)
+    cantidad = Column(Integer, nullable=False, default=0)
+    stock_minimo = Column(Integer, nullable=False, default=0)
     costo_unitario = Column(Float, nullable=False, default=0)
     estado = Column(String, nullable=False, default="ACTIVO")
     fecha_creacion = Column(DateTime, nullable=False, default=datetime.datetime.now)
@@ -475,4 +450,3 @@ class Service(Base):
     fecha = Column(DateTime, nullable=False, default=datetime.datetime.now)
     pagado = Column(Boolean, nullable=False, default=False)
     incluido_en_calculo = Column(Boolean, nullable=False, default=True)
->>>>>>> Burguerland_V_1.0

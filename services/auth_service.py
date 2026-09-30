@@ -1,45 +1,56 @@
 # services/auth_service.py
+import base64
 import hashlib
-<<<<<<< HEAD
+import hmac
+import os
+
 from sqlalchemy.orm import Session
-from database.models import User
-=======
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+
 from database.models import Usuario
 
->>>>>>> Burguerland_V_1.0
+
+_ITERATIONS = 200_000
+_ALGORITHM = "pbkdf2_sha256"
+
 
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+    if not password:
+        raise ValueError("La contraseña no puede estar vacía.")
 
-<<<<<<< HEAD
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _ITERATIONS)
+    salt_b64 = base64.b64encode(salt).decode("ascii")
+    digest_b64 = base64.b64encode(digest).decode("ascii")
+    return f"{_ALGORITHM}${_ITERATIONS}${salt_b64}${digest_b64}"
+
+
 def verify_password(password: str, hashed: str) -> bool:
-    return hash_password(password) == hashed
+    if not password or not hashed:
+        return False
 
-def authenticate_user(db: Session,username: str, password: str):
-    user = db.query(User).filter(User.username == username).first()
-    if user and verify_password(password, user.password_hash):
-=======
+    if hashed.startswith(f"{_ALGORITHM}$"):
+        try:
+            _, iterations, salt_b64, digest_b64 = hashed.split("$", 3)
+            salt = base64.b64decode(salt_b64)
+            expected = base64.b64decode(digest_b64)
+            actual = hashlib.pbkdf2_hmac(
+                "sha256",
+                password.encode("utf-8"),
+                salt,
+                int(iterations),
+            )
+            return hmac.compare_digest(actual, expected)
+        except (ValueError, TypeError):
+            return False
 
-def verify_password(password: str, hashed: str) -> bool:
-    return hash_password(password) == hashed
+    return hashlib.sha256(password.encode("utf-8")).hexdigest() == hashed
 
 
-def authenticate_user(db: Session, username: str, password: str):
-    if not username or not password:
+def authenticate_user(db: Session, correo: str, password: str):
+    if not correo or not password:
         return None
 
-    value = username.strip().lower()
-    user = db.query(Usuario).filter(
-        or_(
-            func.lower(Usuario.correo) == value,
-            func.lower(Usuario.nombre) == value,
-        )
-    ).first()
+    value = correo.strip().lower()
+    user = db.query(Usuario).filter(Usuario.correo == value).first()
 
-    if user and verify_password(password, user.contraseña):
->>>>>>> Burguerland_V_1.0
-        return user
-    return None
-
+    return user if user and verify_password(password, user.contraseña) else None

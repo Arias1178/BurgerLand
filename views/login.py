@@ -1,19 +1,10 @@
-import flet as ft
+﻿import flet as ft
 
-<<<<<<< HEAD
-def LoginView(page: ft.Page, on_login_success):
-    txt_username = ft.TextField(label="Usuario", icon="person", width=300, autofocus=True)
-    txt_password = ft.TextField(label="Contraseña", icon="lock", password=True, can_reveal_password=True, width=300)
-    lbl_error = ft.Text(value="", color="red", weight=ft.FontWeight.BOLD)
-
-    async def btn_login_click(e):
-=======
 
 def login_view(page: ft.Page, on_login_success):
-
     campo_ancho = 300
 
-    txt_username = ft.TextField(
+    txt_correo = ft.TextField(
         label="Usuario o correo",
         width=campo_ancho,
         height=54,
@@ -25,7 +16,7 @@ def login_view(page: ft.Page, on_login_success):
         label_style=ft.TextStyle(color="#A7AEC2", size=14),
         text_style=ft.TextStyle(color="white", size=15),
         content_padding=ft.Padding(left=16, right=16, top=8, bottom=8),
-        prefix_icon=ft.Icons.PERSON_OUTLINE,
+        prefix_icon=ft.Icons.EMAIL_OUTLINED,
     )
 
     txt_password = ft.TextField(
@@ -53,43 +44,12 @@ def login_view(page: ft.Page, on_login_success):
         from database.database import SessionLocal
         from services.auth_service import authenticate_user
 
->>>>>>> Burguerland_V_1.0
         lbl_error.value = ""
-        if not txt_username.value or not txt_password.value:
+        if not txt_correo.value or not txt_password.value:
             lbl_error.value = "Por favor, llena todos los campos."
             page.update()
             return
 
-<<<<<<< HEAD
-        # probar la interfaz
-        if txt_username.value == "admin" and txt_password.value == "admin123":
-            page.session.set("user_id", 1)
-            page.session.set("username", "admin")
-            page.session.set("user_role", "Administrador")
-            await on_login_success()
-        else:
-            lbl_error.value = "Usuario o contraseña incorrectos."
-
-        page.update()
-
-    return ft.Container(
-        content=ft.Column(
-            horizontal_alignment="center",
-            alignment="center",
-            spacing=20,
-            controls=[
-                ft.Icon("lock_person_rounded", size=80, color="blue"),
-                ft.Text("Sistema de Gestión", style=ft.TextThemeStyle.HEADLINE_SMALL, weight="bold"),
-                txt_username,
-                txt_password,
-                lbl_error,
-                ft.Button("Iniciar Sesión", icon="login", bgcolor="blue", color="white", width=300, on_click=btn_login_click)
-            ]
-        ),
-        alignment="center",
-        expand=True
-    )
-=======
         texto_boton.value = "Verificando..."
         indicador_carga.visible = True
         btn_login.disabled = True
@@ -97,7 +57,7 @@ def login_view(page: ft.Page, on_login_success):
 
         db = SessionLocal()
         try:
-            usuario = authenticate_user(db, txt_username.value, txt_password.value)
+            usuario = authenticate_user(db, txt_correo.value, txt_password.value)
         finally:
             db.close()
 
@@ -110,7 +70,7 @@ def login_view(page: ft.Page, on_login_success):
             btn_login.disabled = False
             page.update()
 
-    txt_username.on_submit = lambda e: page.run_task(btn_login_click, e)
+    txt_correo.on_submit = lambda e: page.run_task(btn_login_click, e)
     txt_password.on_submit = lambda e: page.run_task(btn_login_click, e)
 
     btn_login = ft.ElevatedButton(
@@ -199,7 +159,7 @@ def login_view(page: ft.Page, on_login_success):
                     color="#A7AEC2",
                 ),
                 ft.Container(height=6),
-                ft.Column(spacing=16, controls=[txt_username, txt_password]),
+                ft.Column(spacing=16, controls=[txt_correo, txt_password]),
                 lbl_error,
                 btn_login,
             ],
@@ -235,4 +195,3 @@ def login_view(page: ft.Page, on_login_success):
         ),
         content=tarjeta,
     )
->>>>>>> Burguerland_V_1.0

@@ -1,13 +1,10 @@
+import datetime
+
 from database.database import engine, Base
-<<<<<<< HEAD
-from database.models import Usuario, rol, estado_usuarios, estados_productos , estados_caja , metodos_pago , estado_ventas
-from services.auth_service import hash_password
-from database.database import SessionLocal
-=======
 from database.models import (
     Usuario, rol, estado_usuarios, estados_productos, estados_caja, metodos_pago,
-    estado_ventas, categorias, productos, inventario, proveedores, categorias_gasto,
-    parametros_legales
+    estado_ventas, categorias, productos, proveedores,
+    categorias_gasto, parametros_legales, categorias_proveedores
 )
 from services.auth_service import hash_password
 from database.database import SessionLocal
@@ -20,15 +17,12 @@ def _asegurar_columna(db, tabla, columna, definicion_sql):
     if columna not in nombres:
         db.execute(text(f"ALTER TABLE {tabla} ADD COLUMN {definicion_sql}"))
         db.commit()
->>>>>>> Burguerland_V_1.0
 
 def init_db():
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
 
-<<<<<<< HEAD
-=======
     # Año base para los parámetros legales: actualizar anualmente según normativa.
     if not db.query(parametros_legales).filter(parametros_legales.anio == 2026).first():
         db.add(parametros_legales(
@@ -67,6 +61,8 @@ def init_db():
     _asegurar_columna(db, "proveedores", "que_provee", "que_provee VARCHAR NOT NULL DEFAULT ''")
     _asegurar_columna(db, "proveedores", "cuanto_cobra", "cuanto_cobra FLOAT NOT NULL DEFAULT 0")
     _asegurar_columna(db, "proveedores", "estado", "estado VARCHAR NOT NULL DEFAULT 'ACTIVO'")
+    _asegurar_columna(db, "detalles_compras", "id_inventario", "id_inventario INTEGER")
+    _asegurar_columna(db, "productos", "id_inventario", "id_inventario INTEGER")
     _asegurar_columna(db, "ventas", "id_proveedor", "id_proveedor INTEGER")
     _asegurar_columna(db, "ventas", "proveedores_texto", "proveedores_texto VARCHAR")
     _asegurar_columna(db, "ventas", "costo_proveedor", "costo_proveedor FLOAT NOT NULL DEFAULT 0")
@@ -76,8 +72,14 @@ def init_db():
     _asegurar_columna(db, "deudas", "nombre", "nombre VARCHAR NOT NULL DEFAULT 'Deuda'")
     _asegurar_columna(db, "deudas", "incluido_en_calculo", "incluido_en_calculo BOOLEAN NOT NULL DEFAULT 1")
     _asegurar_columna(db, "servicios_financieros", "incluido_en_calculo", "incluido_en_calculo BOOLEAN NOT NULL DEFAULT 1")
+    for categoria, in db.query(proveedores.que_provee).distinct().all():
+        nombre_categoria = (categoria or "").strip()
+        if nombre_categoria and not db.query(categorias_proveedores).filter(
+            categorias_proveedores.nombre == nombre_categoria
+        ).first():
+            db.add(categorias_proveedores(nombre=nombre_categoria, estado="ACTIVO"))
+    db.commit()
 
->>>>>>> Burguerland_V_1.0
     # crear roles
     roles = ["ADMIN", "VENDEDOR", "CAJERO"]
     for nombre in roles:
@@ -92,8 +94,6 @@ def init_db():
             db.add(estados_productos(nombre=nombre))
     db.commit()
 
-<<<<<<< HEAD
-=======
     # crear categorías
     nombres_categorias = ["Burgers", "Hot Dogs", "Fast Food", "Bebidas Frías", "Bebidas Calientes", "Adiciones"]
     for nombre in nombres_categorias:
@@ -210,9 +210,7 @@ def init_db():
     db.commit()
     print(f"{len(lista_productos)} productos verificados/creados.")
 
-
-
->>>>>>> Burguerland_V_1.0
+    # Sin datos de ejemplo: proveedores e inventario los crea el propietario desde la app.
     # crear estados de usuario
     estados = ["ACTIVO", "INACTIVO"]
     for nombre in estados:
@@ -247,18 +245,16 @@ def init_db():
     estado_activo = db.query(estado_usuarios).filter(estado_usuarios.nombre == "ACTIVO").first()
 
     # crear usuario admin
-    if not db.query(Usuario).filter(Usuario.correo == "admin@burgerland.com").first():
+    if not db.query(Usuario).filter(Usuario.correo == "admin@burguerland.com").first():
         admin = Usuario(
             nombre="Administrador",
-            correo="admin@burgerland.com",
+            correo="admin@burguerland.com",
             contraseña=hash_password("admin123"),
             id_rol=rol_admin.id_rol,
             id_estado=estado_activo.id_estado
         )
         db.add(admin)
         db.commit()
-<<<<<<< HEAD
-=======
     
     # buscar rol vendedor y estado activo
     rol_vendedor = db.query(rol).filter(rol.nombre == "VENDEDOR").first()
@@ -274,14 +270,9 @@ def init_db():
         )
         db.add(vendedor)
         db.commit()
->>>>>>> Burguerland_V_1.0
 
     db.close()
     print("Base de datos creada exitosamente")
 
 if __name__ == "__main__":
     init_db()
-<<<<<<< HEAD
-
-=======
->>>>>>> Burguerland_V_1.0
