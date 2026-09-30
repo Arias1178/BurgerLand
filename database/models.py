@@ -2,11 +2,6 @@ from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, Foreig
 from sqlalchemy.orm import relationship
 from database.database import Base
 import datetime
-import enum 
-
-class UserRole(enum.Enum):
-    ADMIN = "Administrador"
-    VENDEDOR = "Vendedor"
 
 
 class rol(Base):
@@ -68,6 +63,13 @@ class proveedores(Base):
     cuanto_cobra = Column(Float, nullable=False, default=0)
     estado = Column(String, nullable=False, default="ACTIVO")
 
+class categorias_proveedores(Base):
+    __tablename__ = "categorias_proveedores"
+
+    id_categoria_proveedor = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String, unique=True, nullable=False)
+    estado = Column(String, nullable=False, default="ACTIVO")
+
 class productos(Base):
     __tablename__ = "productos"
 
@@ -79,6 +81,7 @@ class productos(Base):
     id_categoria = Column(Integer, ForeignKey("categorias.id_categoria"), index=True)
     id_estado = Column(Integer, ForeignKey("estados_productos.id_estado_producto"), index=True)
     id_proveedor = Column(Integer, ForeignKey("proveedores.id_proveedor"), index=True)
+    id_inventario = Column(Integer, ForeignKey("inventario.id_inventario"), index=True, nullable=True)
 
 
 class caja(Base):
@@ -148,7 +151,7 @@ class detalles_compras (Base):
     precio = Column(Float, nullable=False)
     subtotal = Column(Float, nullable=False)
     id_compra = Column(Integer, ForeignKey("compras.id_compra"), index=True)
-    id_producto = Column(Integer, ForeignKey("productos.id_producto"), index=True)
+    id_inventario = Column(Integer, ForeignKey("inventario.id_inventario"), index=True)
 
 class informes(Base):
     __tablename__ = "informes"
@@ -376,8 +379,8 @@ class inventario(Base):
     nombre = Column(String, nullable=False, index=True)
     categoria = Column(String, nullable=False)
     unidad_medida = Column(String, nullable=False)
-    cantidad = Column(Float, nullable=False, default=0)
-    stock_minimo = Column(Float, nullable=False, default=0)
+    cantidad = Column(Integer, nullable=False, default=0)
+    stock_minimo = Column(Integer, nullable=False, default=0)
     costo_unitario = Column(Float, nullable=False, default=0)
     estado = Column(String, nullable=False, default="ACTIVO")
     fecha_creacion = Column(DateTime, nullable=False, default=datetime.datetime.now)

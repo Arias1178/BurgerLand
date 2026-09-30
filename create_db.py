@@ -1,8 +1,10 @@
+import datetime
+
 from database.database import engine, Base
 from database.models import (
     Usuario, rol, estado_usuarios, estados_productos, estados_caja, metodos_pago,
-    estado_ventas, categorias, productos, inventario, proveedores, categorias_gasto,
-    parametros_legales
+    estado_ventas, categorias, productos, proveedores,
+    categorias_gasto, parametros_legales, categorias_proveedores
 )
 from services.auth_service import hash_password
 from database.database import SessionLocal
@@ -59,6 +61,8 @@ def init_db():
     _asegurar_columna(db, "proveedores", "que_provee", "que_provee VARCHAR NOT NULL DEFAULT ''")
     _asegurar_columna(db, "proveedores", "cuanto_cobra", "cuanto_cobra FLOAT NOT NULL DEFAULT 0")
     _asegurar_columna(db, "proveedores", "estado", "estado VARCHAR NOT NULL DEFAULT 'ACTIVO'")
+    _asegurar_columna(db, "detalles_compras", "id_inventario", "id_inventario INTEGER")
+    _asegurar_columna(db, "productos", "id_inventario", "id_inventario INTEGER")
     _asegurar_columna(db, "ventas", "id_proveedor", "id_proveedor INTEGER")
     _asegurar_columna(db, "ventas", "proveedores_texto", "proveedores_texto VARCHAR")
     _asegurar_columna(db, "ventas", "costo_proveedor", "costo_proveedor FLOAT NOT NULL DEFAULT 0")
@@ -68,6 +72,13 @@ def init_db():
     _asegurar_columna(db, "deudas", "nombre", "nombre VARCHAR NOT NULL DEFAULT 'Deuda'")
     _asegurar_columna(db, "deudas", "incluido_en_calculo", "incluido_en_calculo BOOLEAN NOT NULL DEFAULT 1")
     _asegurar_columna(db, "servicios_financieros", "incluido_en_calculo", "incluido_en_calculo BOOLEAN NOT NULL DEFAULT 1")
+    for categoria, in db.query(proveedores.que_provee).distinct().all():
+        nombre_categoria = (categoria or "").strip()
+        if nombre_categoria and not db.query(categorias_proveedores).filter(
+            categorias_proveedores.nombre == nombre_categoria
+        ).first():
+            db.add(categorias_proveedores(nombre=nombre_categoria, estado="ACTIVO"))
+    db.commit()
 
     # crear roles
     roles = ["ADMIN", "VENDEDOR", "CAJERO"]
@@ -199,8 +210,7 @@ def init_db():
     db.commit()
     print(f"{len(lista_productos)} productos verificados/creados.")
 
-
-
+    # Sin datos de ejemplo: proveedores e inventario los crea el propietario desde la app.
     # crear estados de usuario
     estados = ["ACTIVO", "INACTIVO"]
     for nombre in estados:
@@ -235,10 +245,10 @@ def init_db():
     estado_activo = db.query(estado_usuarios).filter(estado_usuarios.nombre == "ACTIVO").first()
 
     # crear usuario admin
-    if not db.query(Usuario).filter(Usuario.correo == "admin@burgerland.com").first():
+    if not db.query(Usuario).filter(Usuario.correo == "admin@burguerland.com").first():
         admin = Usuario(
             nombre="Administrador",
-            correo="admin@burgerland.com",
+            correo="admin@burguerland.com",
             contraseña=hash_password("admin123"),
             id_rol=rol_admin.id_rol,
             id_estado=estado_activo.id_estado

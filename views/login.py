@@ -1,11 +1,10 @@
-import flet as ft
+﻿import flet as ft
 
 
 def login_view(page: ft.Page, on_login_success):
-
     campo_ancho = 300
 
-    txt_username = ft.TextField(
+    txt_correo = ft.TextField(
         label="Usuario o correo",
         width=campo_ancho,
         height=54,
@@ -17,7 +16,7 @@ def login_view(page: ft.Page, on_login_success):
         label_style=ft.TextStyle(color="#A7AEC2", size=14),
         text_style=ft.TextStyle(color="white", size=15),
         content_padding=ft.Padding(left=16, right=16, top=8, bottom=8),
-        prefix_icon=ft.Icons.PERSON_OUTLINE,
+        prefix_icon=ft.Icons.EMAIL_OUTLINED,
     )
 
     txt_password = ft.TextField(
@@ -46,7 +45,7 @@ def login_view(page: ft.Page, on_login_success):
         from services.auth_service import authenticate_user
 
         lbl_error.value = ""
-        if not txt_username.value or not txt_password.value:
+        if not txt_correo.value or not txt_password.value:
             lbl_error.value = "Por favor, llena todos los campos."
             page.update()
             return
@@ -58,7 +57,7 @@ def login_view(page: ft.Page, on_login_success):
 
         db = SessionLocal()
         try:
-            usuario = authenticate_user(db, txt_username.value, txt_password.value)
+            usuario = authenticate_user(db, txt_correo.value, txt_password.value)
         finally:
             db.close()
 
@@ -71,7 +70,7 @@ def login_view(page: ft.Page, on_login_success):
             btn_login.disabled = False
             page.update()
 
-    txt_username.on_submit = lambda e: page.run_task(btn_login_click, e)
+    txt_correo.on_submit = lambda e: page.run_task(btn_login_click, e)
     txt_password.on_submit = lambda e: page.run_task(btn_login_click, e)
 
     btn_login = ft.ElevatedButton(
@@ -160,7 +159,7 @@ def login_view(page: ft.Page, on_login_success):
                     color="#A7AEC2",
                 ),
                 ft.Container(height=6),
-                ft.Column(spacing=16, controls=[txt_username, txt_password]),
+                ft.Column(spacing=16, controls=[txt_correo, txt_password]),
                 lbl_error,
                 btn_login,
             ],

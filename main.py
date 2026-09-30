@@ -21,6 +21,7 @@ from views.historial import historial_view
 from views.menu import menu_view
 from views.inventario import inventario_view
 from views.proveedores import proveedores_view
+from views.compras import compras_view
 from views.informes import informes_view
 from views.nueva_venta_view import nueva_venta_view
 from views.contabilidad import contabilidad_view
@@ -166,7 +167,7 @@ def cerrar_caja(usuario):
 
 async def main(page: ft.Page):
     init_db()
-    page.title = "Burgerland"
+    page.title = "BurgerLand - Sistema de Gestión"
     page.window_width = 1200
     page.window_height = 800
     page.bgcolor = "#2C2F3E"
@@ -205,7 +206,9 @@ async def main(page: ft.Page):
             mostrar_menu=lambda: mostrar_menu(),
             mostrar_inventario=lambda: mostrar_inventario(),
             mostrar_proveedores=lambda: mostrar_proveedores(),
+            mostrar_compras=lambda: mostrar_compras(),
             mostrar_informes=lambda: mostrar_informes(),
+            compras_habilitadas=usuario_es_admin(),
             mostrar_contabilidad=lambda: mostrar_contabilidad(),
             contabilidad_habilitada=contabilidad_habilitada,
         )
@@ -274,6 +277,12 @@ async def main(page: ft.Page):
         page.vertical_alignment = "start"
         page.padding = 20
         navegar(proveedores_view(page, get_navbar("proveedores"), usuario_actual=usuario_actual["valor"]))
+
+    def mostrar_compras(usuario=None):
+        page.horizontal_alignment = "start"
+        page.vertical_alignment = "start"
+        page.padding = 20
+        navegar(compras_view(page, get_navbar("compras"), usuario_actual=usuario_actual["valor"]))
 
     def mostrar_inventario(usuario=None):
         page.horizontal_alignment = "start"

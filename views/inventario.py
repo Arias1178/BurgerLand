@@ -4,6 +4,10 @@ from database.database import SessionLocal
 from database.models import inventario, rol
 
 
+def formato_entero(valor):
+    return str(int(valor or 0))
+
+
 def inventario_view(page: ft.Page, navbar, usuario_actual=None):
     db = SessionLocal()
     rol_usuario = None
@@ -20,6 +24,20 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         try:
             items = db.query(inventario).order_by(inventario.nombre.asc()).all()
             return items
+        finally:
+            db.close()
+
+    def obtener_categorias():
+        db = SessionLocal()
+        try:
+            return [
+                categoria
+                for categoria, in db.query(inventario.categoria)
+                .filter(inventario.categoria.isnot(None), inventario.categoria != "")
+                .distinct()
+                .order_by(inventario.categoria.asc())
+                .all()
+            ]
         finally:
             db.close()
 
@@ -43,10 +61,25 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
 
     def abrir_formulario(item=None):
         nombre = ft.TextField(label="Nombre", value=item.nombre if item else "")
-        categoria = ft.TextField(label="Categoría", value=item.categoria if item else "")
+        categorias = obtener_categorias()
+        categoria_nueva = ft.TextField(label="Nueva categoría", visible=False)
+        categoria = ft.Dropdown(
+            label="Categoría",
+            value=item.categoria if item and item.categoria in categorias else None,
+            options=[
+                *[ft.dropdown.Option(valor) for valor in categorias],
+                ft.dropdown.Option("__nueva__", "Crear nueva categoría..."),
+            ],
+        )
+
+        def cambiar_categoria(e):
+            categoria_nueva.visible = categoria.value == "__nueva__"
+            page.update()
+
+        categoria.on_change = cambiar_categoria
         unidad = ft.TextField(label="Unidad de medida", value=item.unidad_medida if item else "")
-        cantidad = ft.TextField(label="Cantidad", value=str(item.cantidad if item else 0))
-        stock_minimo = ft.TextField(label="Stock mínimo", value=str(item.stock_minimo if item else 0))
+        cantidad = ft.TextField(label="Cantidad", value=formato_entero(item.cantidad) if item else "0")
+        stock_minimo = ft.TextField(label="Stock mínimo", value=formato_entero(item.stock_minimo) if item else "0")
         costo_unitario = ft.TextField(label="Costo unitario", value=str(item.costo_unitario if item else 0))
         estado = ft.Dropdown(
             label="Estado",
@@ -59,17 +92,22 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         mensaje = ft.Text("", color="#FF7B7B", size=12)
 
         def guardar(e):
-            if not nombre.value.strip() or not categoria.value.strip() or not unidad.value.strip():
+            categoria_valor = (
+                categoria_nueva.value.strip()
+                if categoria.value == "__nueva__"
+                else (categoria.value or "").strip()
+            )
+            if not nombre.value.strip() or not categoria_valor or not unidad.value.strip():
                 mensaje.value = "Completa nombre, categoría y unidad."
                 page.update()
                 return
 
             try:
-                cantidad_valor = float(cantidad.value)
-                stock_minimo_valor = float(stock_minimo.value)
+                cantidad_valor = int(cantidad.value)
+                stock_minimo_valor = int(stock_minimo.value)
                 costo_unitario_valor = float(costo_unitario.value)
             except ValueError:
-                mensaje.value = "Cantidad, stock mínimo y costo deben ser numéricos."
+                mensaje.value = "Cantidad y stock mínimo deben ser enteros; el costo debe ser numérico."
                 page.update()
                 return
 
@@ -79,7 +117,7 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                     db.add(
                         inventario(
                             nombre=nombre.value.strip(),
-                            categoria=categoria.value.strip(),
+                            categoria=categoria_valor,
                             unidad_medida=unidad.value.strip(),
                             cantidad=cantidad_valor,
                             stock_minimo=stock_minimo_valor,
@@ -94,7 +132,7 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                         page.update()
                         return
                     registro.nombre = nombre.value.strip()
-                    registro.categoria = categoria.value.strip()
+                    registro.categoria = categoria_valor
                     registro.unidad_medida = unidad.value.strip()
                     registro.cantidad = cantidad_valor
                     registro.stock_minimo = stock_minimo_valor
@@ -107,6 +145,14 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
 
             page.pop_dialog()
             refrescar()
+            page.show_dialog(
+                ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text("Inventario actualizado", color="#7AE582"),
+                    content=ft.Text(f"Ajuste aplicado a {item.nombre}."),
+                    actions=[ft.TextButton("Aceptar", on_click=lambda e: page.pop_dialog())],
+                )
+            )
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -116,7 +162,17 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                 content=ft.Column(
                     tight=True,
                     scroll="auto",
-                    controls=[nombre, categoria, unidad, cantidad, stock_minimo, costo_unitario, estado, mensaje],
+                    controls=[
+                        nombre,
+                        categoria,
+                        categoria_nueva,
+                        unidad,
+                        cantidad,
+                        stock_minimo,
+                        costo_unitario,
+                        estado,
+                        mensaje,
+                    ],
                 ),
             ),
             actions=[
@@ -134,9 +190,9 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
 
         def guardar(e):
             try:
-                delta = float(ajuste.value)
+                delta = int(ajuste.value)
             except ValueError:
-                mensaje.value = "El ajuste debe ser numérico."
+                mensaje.value = "El ajuste debe ser un número entero."
                 page.update()
                 return
 
@@ -158,7 +214,7 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text(f"Ajustar cantidad: {item.nombre}"),
-            content=ft.Column(tight=True, controls=[ft.Text(f"Cantidad actual: {item.cantidad}"), ajuste, mensaje]),
+            content=ft.Column(tight=True, controls=[ft.Text(f"Cantidad actual: {formato_entero(item.cantidad)}"), ajuste, mensaje]),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
                 ft.TextButton("Aplicar", on_click=guardar),
@@ -166,7 +222,7 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         )
         page.show_dialog(dialog)
 
-    def construir_tabla(items):
+    def construir_tabla(items, categoria=None):
         if not items:
             return ft.Container(
                 alignment=ft.Alignment(0, 0),
@@ -197,9 +253,9 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                     cells=[
                         ft.DataCell(ft.Text(item.nombre, color="white")),
                         ft.DataCell(ft.Text(item.categoria, color="white")),
-                        ft.DataCell(ft.Text(str(item.cantidad), color="white")),
+                        ft.DataCell(ft.Text(formato_entero(item.cantidad), color="white")),
                         ft.DataCell(ft.Text(item.unidad_medida, color="white")),
-                        ft.DataCell(ft.Text(str(item.stock_minimo), color="white")),
+                        ft.DataCell(ft.Text(formato_entero(item.stock_minimo), color="white")),
                         ft.DataCell(
                             ft.Text(
                                 texto_estado(item),
@@ -217,9 +273,7 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                 )
             )
 
-        return ft.Container(
-            padding=10,
-            content=ft.DataTable(
+        tabla = ft.DataTable(
                 columns=columnas,
                 rows=filas,
                 border=ft.Border(
@@ -233,7 +287,45 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                 divider_thickness=1,
                 column_spacing=20,
                 horizontal_margin=10,
+        )
+        contenido = ft.Container(
+            padding=10,
+            content=ft.Column(
+                scroll="auto",
+                controls=[
+                    ft.Row(
+                        scroll="auto",
+                        controls=[tabla],
+                    )
+                ],
             ),
+        )
+        if categoria:
+            return ft.Column(
+                spacing=6,
+                controls=[
+                    ft.Text(
+                        categoria,
+                        size=17,
+                        weight="bold",
+                        color="#F2C744",
+                    ),
+                    contenido,
+                ],
+            )
+        return contenido
+
+    def construir_tablas_por_categoria(items):
+        grupos = {}
+        for item in items:
+            grupos.setdefault(item.categoria or "Sin categoría", []).append(item)
+        return ft.Column(
+            spacing=18,
+            scroll="auto",
+            controls=[
+                construir_tabla(grupo, categoria)
+                for categoria, grupo in sorted(grupos.items())
+            ],
         )
 
     def refrescar():
@@ -247,7 +339,7 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                 or texto in item.categoria.lower()
                 or texto in item.unidad_medida.lower()
             ]
-        tabla_container.content = construir_tabla(items)
+        tabla_container.content = construir_tablas_por_categoria(items)
         page.update()
 
     buscador = ft.TextField(
@@ -257,7 +349,7 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         border_radius=12,
     )
 
-    tabla_container.content = construir_tabla(obtener_items())
+    tabla_container.content = construir_tablas_por_categoria(obtener_items())
 
     tarjeta = ft.Container(
         expand=True,
@@ -281,7 +373,14 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                     ],
                 ),
                 buscador,
-                ft.Container(expand=True, content=tabla_container),
+                ft.Container(
+                    expand=True,
+                    content=ft.Column(
+                        expand=True,
+                        scroll="auto",
+                        controls=[tabla_container],
+                    ),
+                ),
             ],
         ),
     )

@@ -15,7 +15,7 @@ import datetime as dt
 import flet as ft
 
 from database.database import SessionLocal
-from database.models import Debt, Payroll, Service, Transaction, rol
+from database.models import Debt, Payroll, Service, Transaction, rol, ventas
 from services.financial_engine import FinancialEngine
 
 from services.contabilidad_service import (
@@ -102,6 +102,7 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
                 payroll=db.query(Payroll).all(),
                 debts=db.query(Debt).all(),
                 services=db.query(Service).all(),
+                sales=db.query(ventas).all(),
             )
             pnl = engine.calculate_pnl(inicio, fin)
             cash = engine.calculate_cash_flow(inicio, fin)

@@ -239,6 +239,7 @@ def _obtener_resumen_contabilidad_periodo(fecha_inicio, fecha_fin):
             payroll=db.query(Payroll).all(),
             debts=db.query(Debt).all(),
             services=db.query(Service).all(),
+            sales=db.query(ventas).all(),
         )
         pnl = engine.calculate_pnl(fecha_inicio, fecha_fin)
         cash = engine.calculate_cash_flow(fecha_inicio, fecha_fin)

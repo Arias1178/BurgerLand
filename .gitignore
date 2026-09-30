@@ -1,5 +1,9 @@
-venv/
 __pycache__/
 *.pyc
 burgerland.db
 .vscode/
+burguerland.db
+.venv/
+venv/
+.env
+reportes/*.pdf

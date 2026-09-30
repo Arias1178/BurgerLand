@@ -3,7 +3,16 @@ import datetime
 import flet as ft
 
 from database.database import SessionLocal
-from database.models import productos, categorias, estados_productos, metodos_pago, ventas, detalle_ventas, proveedores
+from database.models import (
+    productos,
+    categorias,
+    estados_productos,
+    metodos_pago,
+    ventas,
+    detalle_ventas,
+    proveedores,
+    inventario,
+)
 
 
 def nueva_venta_view(page: ft.Page, navbar, usuario_actual, on_venta_completada, caja_actual=None):
@@ -49,6 +58,56 @@ def nueva_venta_view(page: ft.Page, navbar, usuario_actual, on_venta_completada,
     mensaje_venta_text = ft.Text("", color="#FF7B7B", size=12)
     proveedores_column = ft.Column(spacing=6, expand=True, scroll="auto")
     contenedor_menu = ft.Container(expand=True)
+
+    def validar_item_venta(item):
+        if not isinstance(item, dict):
+            raise ValueError("Cada producto del carrito debe ser un registro válido.")
+
+        cantidad = item.get("cantidad")
+        precio = item.get("precio")
+        nombre = item.get("nombre", "el producto")
+
+        try:
+            cantidad_int = int(cantidad)
+        except (TypeError, ValueError):
+            raise ValueError(f"La cantidad para '{nombre}' debe ser un número entero.")
+
+        if cantidad_int <= 0:
+            raise ValueError(f"La cantidad para '{nombre}' debe ser mayor que 0.")
+
+        try:
+            precio_valor = float(precio)
+        except (TypeError, ValueError):
+            raise ValueError(f"El precio para '{nombre}' debe ser numérico.")
+
+        if precio_valor < 0:
+            raise ValueError(f"El precio para '{nombre}' no puede ser negativo.")
+
+        return cantidad_int, precio_valor
+
+    def validar_stock_disponible(db_session, carrito_local):
+        if not carrito_local:
+            raise ValueError("Debes agregar al menos un producto para registrar la venta.")
+
+        for item in carrito_local:
+            cantidad, _ = validar_item_venta(item)
+            producto = db_session.query(productos).filter(productos.id_producto == item["id_producto"]).first()
+            if not producto:
+                raise ValueError(f"No se encontró el producto {item.get('nombre', 'seleccionado')}.")
+            if producto.id_inventario:
+                insumo = (
+                    db_session.query(inventario)
+                    .filter(inventario.id_inventario == producto.id_inventario)
+                    .with_for_update()
+                    .first()
+                )
+                if not insumo:
+                    raise ValueError(f"El inventario de {producto.nombre} no está configurado.")
+                if insumo.cantidad < cantidad:
+                    raise ValueError(
+                        f"No hay suficiente inventario de {insumo.nombre}. Disponible: {insumo.cantidad:g}."
+                    )
+        return True
 
     def actualizar_carrito():
         carrito_column.controls.clear()
@@ -99,13 +158,29 @@ def nueva_venta_view(page: ft.Page, navbar, usuario_actual, on_venta_completada,
             try:
                 cantidad = int(cantidad_field.value)
                 if cantidad <= 0:
-                    cantidad = 1
+                    raise ValueError("La cantidad debe ser mayor que 0.")
             except ValueError:
-                cantidad = 1
+                mensaje_venta_text.value = "La cantidad debe ser un número entero mayor que 0."
+                page.update()
+                return
+
+            if producto.id_inventario:
+                insumo = db.query(inventario).filter(inventario.id_inventario == producto.id_inventario).first()
+                if insumo is not None and insumo.cantidad < cantidad:
+                    mensaje_venta_text.value = f"No hay suficiente inventario de {insumo.nombre}. Disponible: {insumo.cantidad:g}."
+                    page.update()
+                    return
 
             for item in carrito:
                 if item["id_producto"] == producto.id_producto:
-                    item["cantidad"] += cantidad
+                    nuevo_total = item["cantidad"] + cantidad
+                    if producto.id_inventario:
+                        insumo = db.query(inventario).filter(inventario.id_inventario == producto.id_inventario).first()
+                        if insumo is not None and insumo.cantidad < nuevo_total:
+                            mensaje_venta_text.value = f"No hay suficiente inventario de {insumo.nombre}. Disponible: {insumo.cantidad:g}."
+                            page.update()
+                            return
+                    item["cantidad"] = nuevo_total
                     break
             else:
                 carrito.append(
@@ -339,37 +414,46 @@ def nueva_venta_view(page: ft.Page, navbar, usuario_actual, on_venta_completada,
     actualizar_proveedores_resumen()
 
     def ejecutar_venta():
-        total = sum(item["precio"] * item["cantidad"] for item in carrito)
-        total_proveedores = sum(item["costo"] for item in proveedores_seleccionados)
-        id_proveedor = proveedores_seleccionados[0]["id"] if len(proveedores_seleccionados) == 1 else None
-        proveedores_texto = ", ".join(item["nombre"] for item in proveedores_seleccionados) if proveedores_seleccionados else None
+        if not carrito:
+            mensaje_venta_text.value = "Agrega al menos un producto para registrar la venta."
+            page.update()
+            return
 
-        nueva_venta = ventas(
-            fecha_hora=datetime.datetime.now(),
-            total=total,
-            id_metodos_pagos=metodo_seleccionado["id"],
-            id_usuario=usuario_actual.id_usuario if usuario_actual else None,
-            id_caja=caja_actual.id_caja if caja_actual else None,
-            id_estado_ventas=1,
-            id_proveedor=id_proveedor,
-            proveedores_texto=proveedores_texto,
-            costo_proveedor=total_proveedores,
-        )
-        db.add(nueva_venta)
-        db.commit()
-        db.refresh(nueva_venta)
+        if metodo_seleccionado["id"] is None:
+            mensaje_venta_text.value = "Debes seleccionar un método de pago antes de confirmar la venta."
+            page.update()
+            return
 
-        for item in carrito:
-            db.add(
-                detalle_ventas(
-                    cantidad=item["cantidad"],
-                    precio_unitario=item["precio"],
-                    subtotal=item["precio"] * item["cantidad"],
-                    id_venta=nueva_venta.id_venta,
-                    id_producto=item["id_producto"],
-                )
+        try:
+            for item in carrito:
+                validar_item_venta(item)
+            validar_stock_disponible(db, carrito)
+        except ValueError as error:
+            mensaje_venta_text.value = str(error)
+            page.update()
+            return
+
+        try:
+            from services.venta_service import registrar_venta
+
+            registrar_venta(
+                db_session=db,
+                carrito=carrito,
+                metodo_id=metodo_seleccionado["id"],
+                usuario_actual=usuario_actual,
+                caja_actual=caja_actual,
+                proveedores_seleccionados=proveedores_seleccionados,
             )
-        db.commit()
+        except ValueError as error:
+            db.rollback()
+            mensaje_venta_text.value = str(error)
+            page.update()
+            return
+        except Exception:
+            db.rollback()
+            mensaje_venta_text.value = "No fue posible registrar la venta."
+            page.update()
+            return
 
         carrito.clear()
         proveedores_seleccionados.clear()

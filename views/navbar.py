@@ -9,7 +9,9 @@ def construir_navbar(
     mostrar_menu,
     mostrar_inventario,
     mostrar_proveedores,
+    mostrar_compras,
     mostrar_informes,
+    compras_habilitadas=True,
     mostrar_contabilidad=None,
     contabilidad_habilitada=True,
 ):
@@ -43,6 +45,7 @@ def construir_navbar(
                 boton_nav("Menu", "menu", mostrar_menu),
                 boton_nav("Inventario", "inventario", mostrar_inventario),
                 boton_nav("Proveedores", "proveedores", mostrar_proveedores),
+                boton_nav("Compras", "compras", mostrar_compras, deshabilitado=not compras_habilitadas),
                 boton_nav("Informes", "informes", mostrar_informes),
                 boton_nav(
                     "Contabilidad",

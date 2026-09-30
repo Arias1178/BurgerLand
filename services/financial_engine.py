@@ -20,6 +20,8 @@ def _decimal(value: object) -> Decimal:
 def _in_period(item: object, start_date: dt.date, end_date: dt.date) -> bool:
     value = getattr(item, "fecha", None)
     if value is None:
+        value = getattr(item, "fecha_hora", None)
+    if value is None:
         return True
     if isinstance(value, dt.datetime):
         value = value.date()
@@ -73,18 +75,27 @@ class FinancialEngine:
         payroll: Iterable[Payroll] = (),
         debts: Iterable[Debt] = (),
         services: Iterable[Service] = (),
+        sales: Iterable[object] = (),
     ) -> None:
         self.transactions: Sequence[Transaction] = tuple(transactions)
         self.payroll: Sequence[Payroll] = tuple(payroll)
         self.debts: Sequence[Debt] = tuple(debts)
         self.services: Sequence[Service] = tuple(services)
+        self.sales: Sequence[object] = tuple(sales)
 
     def calculate_pnl(self, start_date: dt.date, end_date: dt.date) -> PnlResult:
         period_transactions = [
             item for item in self.transactions if _in_period(item, start_date, end_date)
         ]
+        period_sales = [
+            item for item in self.sales if _in_period(item, start_date, end_date)
+        ]
         ingresos = sum(
             (_decimal(item.monto) for item in period_transactions if item.tipo == "ingreso"),
+            Decimal(0),
+        )
+        ingresos += sum(
+            (_decimal(item.total) for item in period_sales),
             Decimal(0),
         )
         transaction_variables = sum(
@@ -139,9 +150,16 @@ class FinancialEngine:
         period_transactions = [
             item for item in self.transactions if _in_period(item, start_date, end_date)
         ]
+        period_sales = [
+            item for item in self.sales if _in_period(item, start_date, end_date)
+        ]
         paid = [item for item in period_transactions if _is_paid(item)]
         entries = sum(
             (_decimal(item.monto) for item in paid if item.tipo == "ingreso"), Decimal(0)
+        )
+        entries += sum(
+            (_decimal(item.total) for item in period_sales),
+            Decimal(0),
         )
         # Las ventas no cobradas no son liquidez; una factura de gasto
         # pendiente sí representa una obligación que el flujo debe mostrar.
