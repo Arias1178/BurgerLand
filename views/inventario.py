@@ -73,10 +73,10 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         )
 
         def cambiar_categoria(e):
-            categoria_nueva.visible = categoria.value == "__nueva__"
+            categoria_nueva.visible = e.control.value == "__nueva__"
             page.update()
 
-        categoria.on_change = cambiar_categoria
+        categoria.on_select = cambiar_categoria
         unidad = ft.TextField(label="Unidad de medida", value=item.unidad_medida if item else "")
         cantidad = ft.TextField(label="Cantidad", value=formato_entero(item.cantidad) if item else "0")
         stock_minimo = ft.TextField(label="Stock mínimo", value=formato_entero(item.stock_minimo) if item else "0")
@@ -148,8 +148,15 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
             page.show_dialog(
                 ft.AlertDialog(
                     modal=True,
-                    title=ft.Text("Inventario actualizado", color="#7AE582"),
-                    content=ft.Text(f"Ajuste aplicado a {item.nombre}."),
+                    title=ft.Text(
+                        "Producto agregado" if item is None else "Inventario actualizado",
+                        color="#7AE582",
+                    ),
+                    content=ft.Text(
+                        f"Se agregó {nombre.value.strip()} al inventario."
+                        if item is None
+                        else f"Ajuste aplicado a {item.nombre}."
+                    ),
                     actions=[ft.TextButton("Aceptar", on_click=lambda e: page.pop_dialog())],
                 )
             )

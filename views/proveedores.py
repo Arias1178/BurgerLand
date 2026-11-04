@@ -283,10 +283,10 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
         )
 
         def cambiar_categoria(e):
-            categoria_nueva.visible = que_provee.value == "__nueva__"
+            categoria_nueva.visible = e.control.value == "__nueva__"
             page.update()
 
-        que_provee.on_change = cambiar_categoria
+        que_provee.on_select = cambiar_categoria
         telefono = ft.TextField(label="Número de teléfono", value=prov.telefono if prov else "")
         correo = ft.TextField(label="Correo", value=prov.correo if prov else "")
         cuanto_cobra = ft.TextField(label="Cuánto cobra", value=str(prov.cuanto_cobra if prov else 0))
@@ -340,6 +340,13 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
             finally:
                 db_local.close()
 
+        def guardar_y_cerrar(_):
+            if guardar(mensaje):
+                page.pop_dialog()
+                recargar()
+            else:
+                page.update()
+
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Nuevo proveedor" if prov is None else "Editar proveedor"),
@@ -361,7 +368,7 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
             ),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
-                ft.TextButton("Guardar", on_click=lambda e: (page.pop_dialog() if guardar(mensaje) else page.update())),
+                ft.TextButton("Guardar", on_click=guardar_y_cerrar),
             ],
         )
         page.show_dialog(dialog)

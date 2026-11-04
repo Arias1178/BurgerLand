@@ -1,11 +1,16 @@
 import datetime as dt
 import unittest
+from unittest.mock import patch
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from create_db import init_db
-from database.database import SessionLocal
+from database.database import Base, SessionLocal
 from database.models import (
     caja,
     categorias_gasto,
+    cierre_contable,
     costo_producto,
     detalle_ventas,
     empleados,
@@ -15,7 +20,12 @@ from database.models import (
     productos,
     ventas,
 )
-from services.contabilidad_service import calcular_nomina_mensual, generar_cierre_contable
+from services import contabilidad_service
+from services.contabilidad_service import (
+    _mes_nomina_en_rango,
+    calcular_nomina_mensual,
+    generar_cierre_contable,
+)
 
 
 class ContabilidadServiceTests(unittest.TestCase):
@@ -31,6 +41,68 @@ class ContabilidadServiceTests(unittest.TestCase):
 
     def tearDown(self):
         self.db.close()
+
+    def test_rango_de_nomina_incluye_periodos_que_cruzan_de_anio(self):
+        inicio = dt.date(2025, 11, 15)
+        fin = dt.date(2026, 2, 10)
+
+        self.assertTrue(_mes_nomina_en_rango("2025-11", inicio, fin))
+        self.assertTrue(_mes_nomina_en_rango("2026-01", inicio, fin))
+        self.assertTrue(_mes_nomina_en_rango("2026-02", inicio, fin))
+        self.assertFalse(_mes_nomina_en_rango("2026-03", inicio, fin))
+        self.assertFalse(_mes_nomina_en_rango("periodo-invalido", inicio, fin))
+
+    def test_estado_resultados_separa_gastos_fijos_y_variables(self):
+        engine = create_engine("sqlite://")
+        self.addCleanup(engine.dispose)
+        Base.metadata.create_all(engine)
+        test_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+        with patch.object(contabilidad_service, "SessionLocal", test_session):
+            db = test_session()
+            try:
+                categoria_fija = categorias_gasto(nombre="Arriendo prueba", tipo="FIJO")
+                categoria_variable = categorias_gasto(nombre="Insumos prueba", tipo="VARIABLE")
+                db.add_all([categoria_fija, categoria_variable])
+                db.flush()
+                db.add(
+                    cierre_contable(
+                        id_caja=1,
+                        fecha=dt.date(2026, 9, 15),
+                        ingresos_totales=1000,
+                        costo_ventas=200,
+                        utilidad_bruta=800,
+                        gastos_del_dia=0,
+                        utilidad_operacional=800,
+                        margen_bruto_pct=80,
+                    )
+                )
+                db.add_all(
+                    [
+                        gastos(
+                            fecha=dt.date(2026, 9, 15),
+                            id_categoria_gasto=categoria_fija.id_categoria_gasto,
+                            valor=100,
+                        ),
+                        gastos(
+                            fecha=dt.date(2026, 9, 15),
+                            id_categoria_gasto=categoria_variable.id_categoria_gasto,
+                            valor=200,
+                        ),
+                    ]
+                )
+                db.commit()
+            finally:
+                db.close()
+
+            resultado = contabilidad_service.obtener_estado_resultados(
+                "2026-09-01",
+                "2026-09-30",
+            )
+
+        self.assertEqual(resultado["gastos_fijos"], 100)
+        self.assertEqual(resultado["gastos_variables"], 200)
+        self.assertEqual(resultado["utilidad_operacional"], 500)
 
     def test_calcular_nomina_mensual_saldo_minimo_2026(self):
         parametros = self.db.query(parametros_legales).filter(parametros_legales.anio == 2026).first()
