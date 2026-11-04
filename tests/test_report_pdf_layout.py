@@ -18,7 +18,7 @@ def _datasets():
             "total_ventas": 0,
             "total_unidades": 0,
             "ticket_promedio": 0,
-            "metodo_totales": {},
+            "metodo_totales": {"EFECTIVO": 0, "TARJETA": 0, "NEQUI": 0},
             "top_productos": [],
             "menos_vendidos": [],
             "ingresos": 0,
@@ -188,6 +188,12 @@ class ReportPdfLayoutTests(unittest.TestCase):
                         ),
                         "cash_close": reports._generar_pdf_informe(cash_close, output_dir=output_dir),
                     }
+                    if dataset_name == "empty":
+                        with pymupdf.open(paths["business"]) as document:
+                            self.assertIn(
+                                "ventas registradas por medio de pago",
+                                document[0].get_text().lower(),
+                            )
                     for title, report_key in titles_and_generators:
                         self._assert_layout(Path(paths[report_key]), title)
 

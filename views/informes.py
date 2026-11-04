@@ -897,7 +897,12 @@ def _generar_pdf_reporte_negocio(datos, output_dir=None):
     )))
     contenido.append(resumen)
 
-    if datos["metodo_totales"]:
+    metodos_con_ventas = [
+        (nombre, float(valor or 0))
+        for nombre, valor in datos["metodo_totales"].items()
+        if float(valor or 0) > 0
+    ]
+    if metodos_con_ventas:
         contenido.append(Spacer(1, 10))
         contenido.append(Paragraph("Ventas por medio de pago", ParagraphStyle(
             "SeccionNegocio2",
@@ -910,7 +915,7 @@ def _generar_pdf_reporte_negocio(datos, output_dir=None):
             spaceBefore=8,
             spaceAfter=8,
         )))
-        filas_metodos = [[nombre, _formatear_pesos(valor)] for nombre, valor in datos["metodo_totales"].items() if valor > 0]
+        filas_metodos = [[nombre, _formatear_pesos(valor)] for nombre, valor in metodos_con_ventas]
         tabla_metodos = Table(filas_metodos, colWidths=[220, 220])
         tabla_metodos.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F8FC")),
@@ -921,10 +926,15 @@ def _generar_pdf_reporte_negocio(datos, output_dir=None):
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ]))
         contenido.append(tabla_metodos)
-        grafico_metodos = _grafico_pastel_pdf(list(datos["metodo_totales"].items()))
+        grafico_metodos = _grafico_pastel_pdf(metodos_con_ventas)
         if grafico_metodos is not None:
             contenido.append(Spacer(1, 12))
             contenido.append(grafico_metodos)
+    else:
+        contenido.append(Paragraph(
+            "Aún no hay ventas registradas por medio de pago para este período.",
+            estilos["BodyText"],
+        ))
 
     if datos["top_productos"]:
         contenido.append(Spacer(1, 10))
@@ -1590,7 +1600,7 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
 
     return ft.Container(
         expand=True,
-        padding=ft.padding.only(top=16),
+        padding=ft.padding.Padding(left=0, top=16, right=0, bottom=0),
         content=ft.Column(
             expand=True,
             spacing=20,
