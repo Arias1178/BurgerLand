@@ -14,7 +14,9 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas as pdfcanvas
+from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, Table, TableStyle
 from sqlalchemy import func
 
 from database.database import SessionLocal
@@ -57,6 +59,14 @@ def _tarjeta_resumen(titulo, valor, color="#F2C744"):
 
 
 _PALETA_GRAFICOS = ["#F2C744", "#7AE582", "#7ABAFB", "#FF7B7B", "#C792EA", "#5AD8A6", "#F2946B"]
+HEADER_HEIGHT_MM = 13
+HEADER_GAP_MM = 5
+FOOTER_HEIGHT_MM = 10
+PAGE_MARGIN_MM = 12
+HEADER_HEIGHT = HEADER_HEIGHT_MM * mm
+HEADER_GAP = HEADER_GAP_MM * mm
+FOOTER_HEIGHT = FOOTER_HEIGHT_MM * mm
+PAGE_MARGIN = PAGE_MARGIN_MM * mm
 
 
 def _total_general(informe):
@@ -274,9 +284,14 @@ def _es_fin_de_mes(fecha):
 
 
 def informe_quincenal_habilitado(hoy=None):
-    """El informe comparativo solo se habilita el día 15 y el último día del mes."""
+    """El informe comparativo oficial solo se habilita el día 15 y el último día del mes."""
     hoy = hoy or dt.date.today()
     return hoy.day == 15 or _es_fin_de_mes(hoy)
+
+
+def informe_quincenal_previsualizacion(hoy=None):
+    """Vista previa disponible siempre; la descarga oficial sigue restringida."""
+    return True
 
 
 def _proxima_fecha_habilitacion(hoy=None):
@@ -325,7 +340,7 @@ def _variacion_porcentual(actual, anterior):
     actual = float(actual or 0)
     anterior = float(anterior or 0)
     if anterior == 0:
-        return None if actual == 0 else 100.0
+        return 0.0 if actual == 0 else 100.0
     return ((actual - anterior) / abs(anterior)) * 100
 
 
@@ -525,19 +540,86 @@ def _grafico_comparativo_pdf(metricas, ancho=470, alto=230, color_anterior=None,
     return drawing
 
 
-def _encabezado_pdf(canvas, doc, titulo, fecha_texto):
+class NumberedCanvas(pdfcanvas.Canvas):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        page_count = len(self._saved_page_states)
+        for page_number, state in enumerate(self._saved_page_states, start=1):
+            self.__dict__.update(state)
+            self.setFillColor(colors.white)
+            self.setFont("Helvetica", 8)
+            self.drawRightString(
+                letter[0] - PAGE_MARGIN,
+                letter[1] - HEADER_HEIGHT * 0.44,
+                f"Página {page_number} de {page_count}",
+            )
+            super().showPage()
+        super().save()
+
+
+def _encabezado_pdf(canvas, doc, titulo, fecha_texto, vista_previa=False):
     canvas.saveState()
     width, height = letter
+    header_bottom = height - HEADER_HEIGHT
     canvas.setFillColor(colors.HexColor("#2E3344"))
-    canvas.rect(0, height - 72, width, 72, stroke=0, fill=1)
+    canvas.rect(0, header_bottom, width, HEADER_HEIGHT, stroke=0, fill=1)
     canvas.setFillColor(colors.white)
-    canvas.setFont("Helvetica-Bold", 18)
-    canvas.drawString(40, height - 34, titulo)
-    canvas.setFont("Helvetica", 10)
-    canvas.drawString(40, height - 50, fecha_texto)
-    canvas.setFont("Helvetica", 9)
-    canvas.drawRightString(width - 40, height - 50, f"Página {doc.page}")
+    canvas.setFont("Helvetica-Bold", 9)
+    canvas.drawString(PAGE_MARGIN, height - HEADER_HEIGHT * 0.44, titulo)
+    canvas.setFont("Helvetica", 8)
+    canvas.drawString(PAGE_MARGIN, header_bottom + HEADER_HEIGHT * 0.22, fecha_texto)
+    if vista_previa:
+        canvas.saveState()
+        canvas.setFillColor(colors.Color(1, 1, 1, 0.12))
+        canvas.setFont("Helvetica-Bold", 34)
+        canvas.translate(width / 2, height / 2)
+        canvas.rotate(45)
+        canvas.drawCentredString(0, 0, "VISTA PREVIA")
+        canvas.restoreState()
     canvas.restoreState()
+
+
+def _pie_pdf(canvas, doc, texto):
+    canvas.saveState()
+    canvas.setStrokeColor(colors.HexColor("#D3D8E3"))
+    footer_top = PAGE_MARGIN + FOOTER_HEIGHT
+    canvas.line(PAGE_MARGIN, footer_top, letter[0] - PAGE_MARGIN, footer_top)
+    canvas.setFillColor(colors.HexColor("#5A5F72"))
+    canvas.setFont("Helvetica", 8)
+    canvas.drawString(PAGE_MARGIN, PAGE_MARGIN + 4, texto)
+    canvas.restoreState()
+
+
+def _crear_documento_pdf(ruta, titulo_encabezado, fecha_texto, vista_previa=False, texto_pie="BurgerLand | Reporte"):
+    page_width, page_height = letter
+    frame_bottom = FOOTER_HEIGHT + PAGE_MARGIN
+    frame_top = page_height - HEADER_HEIGHT - HEADER_GAP
+    frame = Frame(
+        PAGE_MARGIN,
+        frame_bottom,
+        page_width - 2 * PAGE_MARGIN,
+        frame_top - frame_bottom,
+        id="report_body",
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0,
+        bottomPadding=0,
+    )
+
+    def dibujar_pagina(canvas, doc):
+        _encabezado_pdf(canvas, doc, titulo_encabezado, fecha_texto, vista_previa)
+        _pie_pdf(canvas, doc, texto_pie)
+
+    documento = BaseDocTemplate(str(ruta), pagesize=letter)
+    documento.addPageTemplates(PageTemplate(id="report", frames=[frame], onPage=dibujar_pagina))
+    return documento
 
 
 _PALETA_PDF = [colors.HexColor(c) for c in _PALETA_GRAFICOS]
@@ -610,8 +692,8 @@ def _grafico_pastel_pdf(pares, ancho=470, alto=210):
     return drawing
 
 
-def _generar_pdf_informe(informe):
-    carpeta = Path(__file__).resolve().parent.parent / "reportes"
+def _generar_pdf_informe(informe, output_dir=None):
+    carpeta = Path(output_dir) if output_dir else Path(__file__).resolve().parent.parent / "reportes"
     carpeta.mkdir(exist_ok=True)
     nombre_archivo = f"cierre_caja_{informe.fecha.strftime('%d_%m_%Y')}_{informe.id_informe}.pdf"
     ruta = carpeta / nombre_archivo
@@ -648,13 +730,11 @@ def _generar_pdf_informe(informe):
         borderPadding=6,
     )
 
-    documento = SimpleDocTemplate(
-        str(ruta),
-        pagesize=letter,
-        leftMargin=36,
-        rightMargin=36,
-        topMargin=90,
-        bottomMargin=40,
+    documento = _crear_documento_pdf(
+        ruta,
+        "BURGERLAND | CAJA",
+        f"Fecha: {informe.fecha.strftime('%d/%m/%Y')}",
+        texto_pie="BurgerLand | Reporte de caja",
     )
 
     contenido = []
@@ -759,26 +839,12 @@ def _generar_pdf_informe(informe):
     contenido.append(Spacer(1, 16))
     contenido.append(total_general)
 
-    def pie(canvas, doc):
-        canvas.saveState()
-        canvas.setStrokeColor(colors.HexColor("#D3D8E3"))
-        canvas.line(doc.leftMargin, 34, letter[0] - doc.rightMargin, 34)
-        canvas.setFont("Helvetica", 8)
-        canvas.setFillColor(colors.HexColor("#5A5F72"))
-        canvas.drawString(doc.leftMargin, 22, "BurgerLand - Reporte de caja")
-        canvas.drawRightString(letter[0] - doc.rightMargin, 22, f"Página {doc.page}")
-        canvas.restoreState()
-
-    def dibujar_pagina(canvas, doc):
-        _encabezado_pdf(canvas, doc, "REPORTE DE CAJA", f"Fecha: {informe.fecha.strftime('%d/%m/%Y')}")
-        pie(canvas, doc)
-
-    documento.build(contenido, onFirstPage=dibujar_pagina, onLaterPages=dibujar_pagina)
+    documento.build(contenido, canvasmaker=NumberedCanvas)
     return str(ruta)
 
 
-def _generar_pdf_reporte_negocio(datos):
-    carpeta = Path(__file__).resolve().parent.parent / "reportes"
+def _generar_pdf_reporte_negocio(datos, output_dir=None):
+    carpeta = Path(output_dir) if output_dir else Path(__file__).resolve().parent.parent / "reportes"
     carpeta.mkdir(exist_ok=True)
     archivo = carpeta / f"reporte_negocio_{dt.date.today().strftime('%d_%m_%Y')}.pdf"
 
@@ -925,13 +991,18 @@ def _generar_pdf_reporte_negocio(datos):
             contenido.append(Spacer(1, 12))
             contenido.append(grafico_low)
 
-    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=54, bottomMargin=40)
-    documento.build(contenido, onFirstPage=lambda canvas, doc: _encabezado_pdf(canvas, doc, "REPORTE GENERAL DEL NEGOCIO", f"Fecha: {dt.date.today().strftime('%d/%m/%Y')}"), onLaterPages=lambda canvas, doc: _encabezado_pdf(canvas, doc, "REPORTE GENERAL DEL NEGOCIO", f"Fecha: {dt.date.today().strftime('%d/%m/%Y')}"))
+    documento = _crear_documento_pdf(
+        archivo,
+        "BURGERLAND | NEGOCIO",
+        f"Fecha: {dt.date.today().strftime('%d/%m/%Y')}",
+        texto_pie="BurgerLand | Reporte general del negocio",
+    )
+    documento.build(contenido, canvasmaker=NumberedCanvas)
     return str(archivo)
 
 
-def _generar_pdf_reporte_contabilidad(datos):
-    carpeta = Path(__file__).resolve().parent.parent / "reportes"
+def _generar_pdf_reporte_contabilidad(datos, output_dir=None):
+    carpeta = Path(output_dir) if output_dir else Path(__file__).resolve().parent.parent / "reportes"
     carpeta.mkdir(exist_ok=True)
     archivo = carpeta / f"reporte_contabilidad_{dt.date.today().strftime('%d_%m_%Y')}.pdf"
 
@@ -1071,8 +1142,13 @@ def _generar_pdf_reporte_contabilidad(datos):
     contenido.append(Spacer(1, 14))
     contenido.append(total)
 
-    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=54, bottomMargin=40)
-    documento.build(contenido, onFirstPage=lambda canvas, doc: _encabezado_pdf(canvas, doc, "REPORTE DE CONTABILIDAD", f"Periodo: {datos['periodo']}"), onLaterPages=lambda canvas, doc: _encabezado_pdf(canvas, doc, "REPORTE DE CONTABILIDAD", f"Periodo: {datos['periodo']}"))
+    documento = _crear_documento_pdf(
+        archivo,
+        "BURGERLAND | CONTABILIDAD",
+        f"Periodo: {datos['periodo']}",
+        texto_pie="BurgerLand | Reporte de contabilidad",
+    )
+    documento.build(contenido, canvasmaker=NumberedCanvas)
     return str(archivo)
 
 
@@ -1113,8 +1189,8 @@ def _tabla_comparativa_pdf(metricas):
     return tabla
 
 
-def _generar_pdf_comparativo_negocio(datos):
-    carpeta = Path(__file__).resolve().parent.parent / "reportes"
+def _generar_pdf_comparativo_negocio(datos, vista_previa=False, output_dir=None):
+    carpeta = Path(output_dir) if output_dir else Path(__file__).resolve().parent.parent / "reportes"
     carpeta.mkdir(exist_ok=True)
     archivo = carpeta / f"comparativo_negocio_{dt.date.today().strftime('%d_%m_%Y')}.pdf"
 
@@ -1129,6 +1205,16 @@ def _generar_pdf_comparativo_negocio(datos):
         textColor=colors.HexColor("#2E3344"),
         spaceAfter=8,
     )))
+    if vista_previa:
+        contenido.append(Paragraph("VISTA PREVIA - Modo de revisión (descarga oficial restringida)", ParagraphStyle(
+            "PreviewComparativoNegocio",
+            parent=estilos["BodyText"],
+            alignment=TA_CENTER,
+            fontName="Helvetica-Bold",
+            fontSize=10,
+            textColor=colors.HexColor("#B54646"),
+            spaceAfter=12,
+        )))
     contenido.append(Paragraph(
         f"Periodo actual: {datos['periodo_actual']['etiqueta']}  |  Periodo anterior: {datos['periodo_anterior']['etiqueta']}",
         ParagraphStyle(
@@ -1171,19 +1257,21 @@ def _generar_pdf_comparativo_negocio(datos):
         ]))
         contenido.append(tabla_productos)
 
-    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=54, bottomMargin=40)
     titulo_encabezado = "INFORME COMPARATIVO QUINCENAL - NEGOCIO"
     fecha_encabezado = f"Actual: {datos['periodo_actual']['etiqueta']}"
-    documento.build(
-        contenido,
-        onFirstPage=lambda canvas, doc: _encabezado_pdf(canvas, doc, titulo_encabezado, fecha_encabezado),
-        onLaterPages=lambda canvas, doc: _encabezado_pdf(canvas, doc, titulo_encabezado, fecha_encabezado),
+    documento = _crear_documento_pdf(
+        archivo,
+        "BURGERLAND | COMPARATIVO DE NEGOCIO",
+        fecha_encabezado,
+        vista_previa=vista_previa,
+        texto_pie="BurgerLand | Comparativo quincenal de negocio",
     )
+    documento.build(contenido, canvasmaker=NumberedCanvas)
     return str(archivo)
 
 
-def _generar_pdf_comparativo_contabilidad(datos):
-    carpeta = Path(__file__).resolve().parent.parent / "reportes"
+def _generar_pdf_comparativo_contabilidad(datos, vista_previa=False, output_dir=None):
+    carpeta = Path(output_dir) if output_dir else Path(__file__).resolve().parent.parent / "reportes"
     carpeta.mkdir(exist_ok=True)
     archivo = carpeta / f"comparativo_contabilidad_{dt.date.today().strftime('%d_%m_%Y')}.pdf"
 
@@ -1198,6 +1286,16 @@ def _generar_pdf_comparativo_contabilidad(datos):
         textColor=colors.HexColor("#2E3344"),
         spaceAfter=8,
     )))
+    if vista_previa:
+        contenido.append(Paragraph("VISTA PREVIA - Modo de revisión (descarga oficial restringida)", ParagraphStyle(
+            "PreviewComparativoContab",
+            parent=estilos["BodyText"],
+            alignment=TA_CENTER,
+            fontName="Helvetica-Bold",
+            fontSize=10,
+            textColor=colors.HexColor("#B54646"),
+            spaceAfter=12,
+        )))
     contenido.append(Paragraph(
         f"Periodo actual: {datos['periodo_actual']['etiqueta']}  |  Periodo anterior: {datos['periodo_anterior']['etiqueta']}",
         ParagraphStyle(
@@ -1223,14 +1321,16 @@ def _generar_pdf_comparativo_contabilidad(datos):
         contenido.append(Spacer(1, 12))
         contenido.append(grafico)
 
-    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=54, bottomMargin=40)
     titulo_encabezado = "INFORME COMPARATIVO QUINCENAL - CONTABILIDAD"
     fecha_encabezado = f"Actual: {datos['periodo_actual']['etiqueta']}"
-    documento.build(
-        contenido,
-        onFirstPage=lambda canvas, doc: _encabezado_pdf(canvas, doc, titulo_encabezado, fecha_encabezado),
-        onLaterPages=lambda canvas, doc: _encabezado_pdf(canvas, doc, titulo_encabezado, fecha_encabezado),
+    documento = _crear_documento_pdf(
+        archivo,
+        "BURGERLAND | COMPARATIVO CONTABLE",
+        fecha_encabezado,
+        vista_previa=vista_previa,
+        texto_pie="BurgerLand | Comparativo quincenal de contabilidad",
     )
+    documento.build(contenido, canvasmaker=NumberedCanvas)
     return str(archivo)
 
 
@@ -1240,12 +1340,9 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
 
     hoy = dt.date.today()
     quincenal_disponible = informe_quincenal_habilitado(hoy)
-    comparativo_negocio = None
-    comparativo_contabilidad = None
-    if quincenal_disponible:
-        periodo_actual, periodo_anterior = _rango_quincenas(hoy)
-        comparativo_negocio = _obtener_comparativo_negocio(periodo_actual, periodo_anterior)
-        comparativo_contabilidad = _obtener_comparativo_contabilidad(periodo_actual, periodo_anterior)
+    periodo_actual, periodo_anterior = _rango_quincenas(hoy)
+    comparativo_negocio = _obtener_comparativo_negocio(periodo_actual, periodo_anterior)
+    comparativo_contabilidad = _obtener_comparativo_contabilidad(periodo_actual, periodo_anterior)
 
     def descargar_reporte_negocio(e):
         ruta_pdf = _generar_pdf_reporte_negocio(negocio)
@@ -1262,14 +1359,14 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
             os.system(f'xdg-open "{ruta_pdf}"')
 
     def descargar_comparativo_negocio(e):
-        ruta_pdf = _generar_pdf_comparativo_negocio(comparativo_negocio)
+        ruta_pdf = _generar_pdf_comparativo_negocio(comparativo_negocio, vista_previa=not quincenal_disponible)
         if os.name == "nt":
             os.startfile(ruta_pdf)
         else:
             os.system(f'xdg-open "{ruta_pdf}"')
 
     def descargar_comparativo_contabilidad(e):
-        ruta_pdf = _generar_pdf_comparativo_contabilidad(comparativo_contabilidad)
+        ruta_pdf = _generar_pdf_comparativo_contabilidad(comparativo_contabilidad, vista_previa=not quincenal_disponible)
         if os.name == "nt":
             os.startfile(ruta_pdf)
         else:
@@ -1427,8 +1524,7 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
                     ),
                     ft.Text(
                         f"Comparativo entre {comparativo_negocio['periodo_anterior']['etiqueta']} (periodo anterior) "
-                        f"y {comparativo_negocio['periodo_actual']['etiqueta']} (periodo actual). "
-                        "Disponible únicamente el día 15 y el último día de cada mes.",
+                        f"y {comparativo_negocio['periodo_actual']['etiqueta']} (periodo actual).",
                         size=13,
                         color="#C9CEDB",
                     ),
@@ -1460,27 +1556,52 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
                 spacing=10,
                 controls=[
                     ft.Text("Informe comparativo quincenal", size=22, weight="bold", color="white"),
+                    ft.Container(
+                        bgcolor="#B54646",
+                        border_radius=8,
+                        padding=ft.padding.Padding(left=12, top=8, right=12, bottom=8),
+                        content=ft.Text("VISTA PREVIA", size=12, weight="bold", color="white"),
+                    ),
                     ft.Text(
                         "Este informe compara el negocio y la contabilidad de los últimos 15 días con la quincena anterior. "
-                        "Solo se habilita el día 15 y el último día de cada mes.",
+                        "La vista previa está disponible todos los días; la descarga oficial se habilita solo el día 15 y el último día de cada mes.",
                         size=13,
                         color="#C9CEDB",
                     ),
-                    ft.Text(f"Próxima disponibilidad: {proxima_fecha.strftime('%d/%m/%Y')}", size=13, color="#F2C744", weight="bold"),
+                    ft.Text(f"Próxima disponibilidad oficial: {proxima_fecha.strftime('%d/%m/%Y')}", size=13, color="#F2C744", weight="bold"),
+                    ft.Divider(color="#3A3F52", height=1),
+                    ft.Text("Negocio: ventas, unidades y ticket promedio", size=16, weight="bold", color="white"),
+                    _grafico_comparativo_horizontal(comparativo_negocio["metricas"].values()),
+                    ft.Row(alignment="end", controls=[
+                        ft.ElevatedButton("Generar vista previa PDF", on_click=descargar_comparativo_negocio, bgcolor="#F2C744", color="#111111"),
+                    ]),
+                    ft.Divider(color="#3A3F52", height=1),
+                    ft.Text("Contabilidad: ingresos, egresos y utilidad", size=16, weight="bold", color="white"),
+                    _grafico_comparativo_horizontal(
+                        comparativo_contabilidad["metricas"].values(),
+                        color_actual="#7AE582",
+                    ),
+                    ft.Row(alignment="end", controls=[
+                        ft.ElevatedButton("Generar vista previa PDF", on_click=descargar_comparativo_contabilidad, bgcolor="#7AE582", color="#111111"),
+                    ]),
                 ],
             ),
         )
 
-    return ft.Column(
+    return ft.Container(
         expand=True,
-        spacing=20,
-        scroll="auto",
-        controls=[
-            navbar,
-            ft.Text("REPORTES Y ESTADÍSTICAS", size=28, weight="bold", color="white"),
-            negocio_card,
-            contabilidad_card,
-            comparativo_card,
-            cierre_card,
-        ],
+        padding=ft.padding.only(top=16),
+        content=ft.Column(
+            expand=True,
+            spacing=20,
+            scroll="auto",
+            controls=[
+                navbar,
+                ft.Text("REPORTES Y ESTADÍSTICAS", size=28, weight="bold", color="white"),
+                negocio_card,
+                contabilidad_card,
+                comparativo_card,
+                cierre_card,
+            ],
+        ),
     )
