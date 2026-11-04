@@ -194,7 +194,8 @@ async def main(page: ft.Page):
         try:
             estado_cerrada = obtener_estado_caja(db, "CERRADA")
             hay_cierre = bool(estado_cerrada and db.query(caja).filter(caja.id_estado_caja == estado_cerrada.id_estado_caja).count() > 0)
-            contabilidad_habilitada = usuario_es_admin() or hay_cierre
+            es_admin = usuario_es_admin()
+            contabilidad_habilitada = es_admin or hay_cierre
         finally:
             db.close()
         return construir_navbar(
@@ -208,9 +209,10 @@ async def main(page: ft.Page):
             mostrar_proveedores=lambda: mostrar_proveedores(),
             mostrar_compras=lambda: mostrar_compras(),
             mostrar_informes=lambda: mostrar_informes(),
-            compras_habilitadas=usuario_es_admin(),
+            compras_habilitadas=es_admin,
             mostrar_contabilidad=lambda: mostrar_contabilidad(),
             contabilidad_habilitada=contabilidad_habilitada,
+            contabilidad_visible=es_admin,
         )
 
     def obtener_caja_para_contabilidad(usuario_id):

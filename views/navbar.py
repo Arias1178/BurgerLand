@@ -14,6 +14,7 @@ def construir_navbar(
     compras_habilitadas=True,
     mostrar_contabilidad=None,
     contabilidad_habilitada=True,
+    contabilidad_visible=True,
 ):
 
     def boton_nav(texto, clave, accion, deshabilitado=False, tooltip=None):
@@ -30,6 +31,27 @@ def construir_navbar(
             on_click=(lambda e: accion()) if accion else None,
         )
 
+    controles = [
+        boton_nav("Inicio", "inicio", mostrar_inicio),
+        boton_nav("Venta", "venta", mostrar_venta),
+        boton_nav("Historial", "historial", mostrar_historial),
+        boton_nav("Menu", "menu", mostrar_menu),
+        boton_nav("Inventario", "inventario", mostrar_inventario),
+        boton_nav("Proveedores", "proveedores", mostrar_proveedores),
+        boton_nav("Compras", "compras", mostrar_compras, deshabilitado=not compras_habilitadas),
+        boton_nav("Informes", "informes", mostrar_informes),
+    ]
+    if contabilidad_visible:
+        controles.append(
+            boton_nav(
+                "Contabilidad",
+                "contabilidad",
+                mostrar_contabilidad,
+                deshabilitado=not contabilidad_habilitada or mostrar_contabilidad is None,
+                tooltip=None if contabilidad_habilitada else "Cierra la caja del día para habilitar Operatividad Contable",
+            )
+        )
+
     return ft.Container(
         width=float("inf"),
         height=60,
@@ -38,22 +60,6 @@ def construir_navbar(
         padding=ft.Padding(left=20, right=20, top=0, bottom=0),
         content=ft.Row(
             vertical_alignment="center",
-            controls=[
-                boton_nav("Inicio", "inicio", mostrar_inicio),
-                boton_nav("Venta", "venta", mostrar_venta),
-                boton_nav("Historial", "historial", mostrar_historial),
-                boton_nav("Menu", "menu", mostrar_menu),
-                boton_nav("Inventario", "inventario", mostrar_inventario),
-                boton_nav("Proveedores", "proveedores", mostrar_proveedores),
-                boton_nav("Compras", "compras", mostrar_compras, deshabilitado=not compras_habilitadas),
-                boton_nav("Informes", "informes", mostrar_informes),
-                boton_nav(
-                    "Contabilidad",
-                    "contabilidad",
-                    mostrar_contabilidad,
-                    deshabilitado=not contabilidad_habilitada or mostrar_contabilidad is None,
-                    tooltip=None if contabilidad_habilitada else "Cierra la caja del día para habilitar Operatividad Contable",
-                ),
-            ]
+            controls=controles,
         )
     )

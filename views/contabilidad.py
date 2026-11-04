@@ -11,6 +11,7 @@ formulario queda deshabilitado.
 """
 
 import datetime as dt
+import math
 
 import flet as ft
 
@@ -107,7 +108,7 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
             pnl = engine.calculate_pnl(inicio, fin)
             cash = engine.calculate_cash_flow(inicio, fin)
             try:
-                break_even = engine.calculate_break_even()
+                break_even = engine.calculate_break_even(inicio, fin)
                 break_even_text = _formatear_pesos(break_even)
             except ValueError:
                 break_even_text = "Sin datos suficientes"
@@ -149,6 +150,8 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
     def registrar_transaccion(_e):
         try:
             monto = float(monto_field.value or 0)
+            if not math.isfinite(monto):
+                raise ValueError("El monto debe ser un número válido.")
             if monto < 0:
                 raise ValueError("El monto no puede ser negativo.")
             tipo = (tipo_field.value or "").strip()
@@ -156,7 +159,8 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
             if tipo not in tipos_validos:
                 raise ValueError("El tipo no coincide con uno de los tipos permitidos.")
             fecha = dt.datetime.combine(dt.date.fromisoformat(fin_field.value), dt.time.min)
-            if not categoria_field.value:
+            categoria = (categoria_field.value or "").strip()
+            if not categoria:
                 raise ValueError("La categoría es obligatoria.")
         except (TypeError, ValueError) as error:
             mensaje.value = f"No se pudo registrar: {error}"
@@ -171,7 +175,7 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
                     tipo=tipo,
                     monto=monto,
                     fecha=fecha,
-                    categoria=categoria_field.value.strip(),
+                    categoria=categoria,
                     pagado=bool(pagado_field.value),
                 )
             )
@@ -211,7 +215,16 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
             ),
         )
 
-    def _fila_registro(titulo, subtitulo, incluido, on_toggle, on_editar, on_eliminar):
+    def _fila_registro(
+        titulo,
+        subtitulo,
+        incluido,
+        on_toggle,
+        on_editar,
+        on_eliminar,
+        estado_pago=None,
+        color_estado_pago="#A7AEC2",
+    ):
         return ft.Container(
             bgcolor="#232838",
             border_radius=14,
@@ -234,6 +247,17 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
                         spacing=6,
                         vertical_alignment="center",
                         controls=[
+                            ft.Container(
+                                bgcolor=color_estado_pago,
+                                border_radius=8,
+                                padding=ft.padding.Padding(left=10, top=4, right=10, bottom=4),
+                                content=ft.Text(
+                                    estado_pago,
+                                    size=11,
+                                    weight="bold",
+                                    color="#101420",
+                                ),
+                            ) if estado_pago else ft.Container(),
                             _badge_incluido(incluido, on_toggle),
                             ft.IconButton(
                                 icon=ft.Icons.EDIT_OUTLINED,
@@ -290,6 +314,8 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
                 lambda e, i=item: toggle_incluido(Debt, i.id, bool(i.incluido_en_calculo)),
                 lambda e, i=item: abrir_dialogo_deuda(i.id),
                 lambda e, i=item: eliminar_click(Debt, i.id, i.nombre),
+                estado_pago="PAGADA" if item.pagado else "PENDIENTE",
+                color_estado_pago="#7AE582" if item.pagado else "#F2C744",
             )
             for item in deudas
         ] or [_fila_vacia("Aún no hay deudas registradas.")]
@@ -512,7 +538,7 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
         campo_cuota = ft.TextField(label="Cuota mensual", width=280, value=str(registro.cuota_mensual) if registro else "")
         campo_capital = ft.TextField(label="Abono capital", width=280, value=str(registro.abono_capital) if registro else "0")
         campo_interes = ft.TextField(label="Pago interés", width=280, value=str(registro.pago_interes) if registro else "0")
-        campo_pagada = ft.Checkbox(label="Pagada", value=bool(registro.pagado) if registro else True)
+        campo_pagada = ft.Checkbox(label="Pagada", value=bool(registro.pagado) if registro else False)
         campo_incluido = ft.Checkbox(
             label="Incluir en cálculo",
             value=bool(registro.incluido_en_calculo) if registro else True,

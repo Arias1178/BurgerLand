@@ -23,7 +23,15 @@ Estas credenciales se validan en la semilla de base de datos generada por `creat
 ### 3. Apertura y cierre de caja
 - `main.py`: `abrir_caja` y `cerrar_caja` implementan la apertura, cierre y cálculo del resumen de caja.
 
-### 4. Validaciones de datos
+### 4. Contabilidad y análisis financiero
+- `views/contabilidad.py` permite consultar P&L y flujo de caja por un rango de fechas, registrar transacciones y administrar nómina, deudas y servicios.
+- `services/financial_engine.py` separa utilidad neta y flujo de caja: el capital de deuda no reduce utilidad, los pagos pendientes no se restan del efectivo disponible, y los intereses pagados sí se incluyen en las salidas de caja.
+- El punto de equilibrio usa el mismo rango seleccionado para el análisis. Los pagos pendientes se muestran aparte e incluyen transacciones, servicios y cuotas de deuda marcadas como pendientes.
+- Las cuotas de deuda pagadas se descuentan del flujo de caja; las impagas se suman a cuentas pendientes y quedan identificadas en el panel. Las deudas nuevas se crean como pendientes de forma predeterminada. Si se registra el valor de cuota, se usa como pago total para evitar duplicar capital e interés; si no, se suman esos dos componentes.
+- `services/contabilidad_service.py` separa gastos fijos y variables según su categoría, y filtra nóminas mensuales por los meses que se cruzan con el rango, incluso cuando este cambia de año.
+- La consolidación diaria sigue bloqueada hasta que la caja esté cerrada. Los cálculos de tasas e impuestos se revisaron como lógica de la aplicación; no constituyen una certificación de cumplimiento tributario.
+
+### 5. Validaciones de datos
 - `services/venta_service.py`: rechaza cantidades no enteras, menores o iguales a cero, precios negativos y productos sin inventario asociado.
 
 ## Pruebas ejecutadas
@@ -35,9 +43,9 @@ C:\Users\dvacc\OneDrive\Desktop\PdG\.venv\Scripts\python.exe -m unittest discove
 ```
 
 Resultado verificado:
-- 6 pruebas ejecutadas.
-- 6 pruebas pasadas.
-- Evidencia en la salida: `Ran 6 tests in ...` y `OK`.
+- 13 pruebas ejecutadas.
+- 13 pruebas pasadas.
+- Evidencia en la salida: `Ran 13 tests in ...` y `OK`.
 
 ### Casos cubiertos
 - venta exitosa descuenta inventario y agrega movimiento de caja
@@ -45,12 +53,18 @@ Resultado verificado:
 - venta rechaza cantidad negativa
 - contabilidad mensual con saldo mínimo
 - cierre contable usa ventas y costos
-- cash flow y utilidad neta con deuda principal
+- nómina mensual en rangos que cruzan el cambio de año
+- estado de resultados separa gastos fijos y variables
+- flujo de caja distingue pagos realizados de obligaciones pendientes e incluye interés y capital pagados
+- cuotas de deuda pagadas y pendientes se incluyen en el flujo y cuentas por pagar
+- punto de equilibrio calculado para el rango seleccionado
+- utilidad neta excluye abonos a capital
 
 ## Estado final de la auditoría
 - Integridad transaccional del flujo venta → detalle de venta → descuento de inventario → movimiento de caja: reforzada y validada.
 - Stock insuficiente: rechazado con error explícito sin cambios parciales.
 - Apertura/cierre de caja: presentes en la lógica principal del sistema.
+- Análisis contable: flujo de caja y punto de equilibrio corregidos para respetar pagos y rango seleccionado; cuotas de deuda reflejadas y destacadas como pendientes; gastos y nómina mensual clasificados en su periodo correspondiente.
 - Autenticación: corregida y segura con PBKDF2.
 - Validaciones: reforzadas para cantidades, precios y stock.
 - Pruebas automatizadas: ejecutadas con éxito en el entorno real del proyecto.

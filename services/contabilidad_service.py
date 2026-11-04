@@ -55,6 +55,20 @@ def _float(value, default=0.0):
         return float(default)
 
 
+def _mes_nomina_en_rango(periodo: str, fecha_inicio: datetime.date, fecha_fin: datetime.date) -> bool:
+    try:
+        inicio_mes = datetime.datetime.strptime(periodo, "%Y-%m").date().replace(day=1)
+    except ValueError:
+        return False
+    siguiente_mes = (
+        datetime.date(inicio_mes.year + 1, 1, 1)
+        if inicio_mes.month == 12
+        else datetime.date(inicio_mes.year, inicio_mes.month + 1, 1)
+    )
+    fin_mes = siguiente_mes - datetime.timedelta(days=1)
+    return inicio_mes <= fecha_fin and fin_mes >= fecha_inicio
+
+
 def _get_parametros_legales(db: Session, anio: Optional[int] = None) -> parametros_legales:
     if anio is None:
         anio = datetime.date.today().year
@@ -375,26 +389,32 @@ def obtener_estado_resultados(fecha_inicio, fecha_fin) -> dict:
     try:
         fecha_inicio = datetime.date.fromisoformat(str(fecha_inicio))
         fecha_fin = datetime.date.fromisoformat(str(fecha_fin))
+        if fecha_inicio > fecha_fin:
+            raise ValueError("La fecha inicial no puede ser posterior a la fecha final.")
         cierres = db.query(cierre_contable).filter(cierre_contable.fecha >= fecha_inicio, cierre_contable.fecha <= fecha_fin).all()
         ingresos_totales = sum(float(item.ingresos_totales or 0) for item in cierres)
         costo_ventas = sum(float(item.costo_ventas or 0) for item in cierres)
         utilidad_bruta = ingresos_totales - costo_ventas
-        gastos_fijos = sum(
-            float(item.valor or 0)
-            for item in db.query(gastos).filter(gastos.fecha >= fecha_inicio, gastos.fecha <= fecha_fin).all()
-            if item.id_categoria_gasto is not None
+        gastos_fijos = 0.0
+        gastos_variables = 0.0
+        gastos_del_periodo = (
+            db.query(gastos, categorias_gasto.tipo)
+            .join(categorias_gasto, categorias_gasto.id_categoria_gasto == gastos.id_categoria_gasto)
+            .filter(gastos.fecha >= fecha_inicio, gastos.fecha <= fecha_fin)
+            .all()
         )
+        for gasto, tipo_categoria in gastos_del_periodo:
+            if (tipo_categoria or "").strip().upper() == "FIJO":
+                gastos_fijos += float(gasto.valor or 0)
+            else:
+                gastos_variables += float(gasto.valor or 0)
 
         nomina_total = 0.0
         for registro in db.query(nomina_mensual).all():
-            try:
-                periodo = datetime.datetime.strptime(registro.periodo, "%Y-%m").date()
-            except ValueError:
-                continue
-            if fecha_inicio.year <= periodo.year <= fecha_fin.year and fecha_inicio.month <= periodo.month <= fecha_fin.month:
+            if _mes_nomina_en_rango(registro.periodo, fecha_inicio, fecha_fin):
                 nomina_total += float(registro.costo_total_empleador or 0)
 
-        utilidad_operacional = utilidad_bruta - gastos_fijos - nomina_total
+        utilidad_operacional = utilidad_bruta - gastos_fijos - gastos_variables - nomina_total
         margen_bruto_pct = (utilidad_bruta / ingresos_totales * 100) if ingresos_totales else 0.0
         parametros = _get_parametros_legales(db, fecha_inicio.year)
         impuesto_consumo = ingresos_totales * float(parametros.tarifa_impoconsumo or 0)
@@ -407,6 +427,7 @@ def obtener_estado_resultados(fecha_inicio, fecha_fin) -> dict:
             "costo_ventas": round(costo_ventas, 2),
             "utilidad_bruta": round(utilidad_bruta, 2),
             "gastos_fijos": round(gastos_fijos, 2),
+            "gastos_variables": round(gastos_variables, 2),
             "nomina_total": round(nomina_total, 2),
             "utilidad_operacional": round(utilidad_operacional, 2),
             "impuesto_consumo": round(impuesto_consumo, 2),
@@ -446,6 +467,7 @@ def exportar_estado_resultados_pdf(fecha_inicio, fecha_fin, path) -> str:
         ("costo_ventas", "Costo de ventas"),
         ("utilidad_bruta", "Utilidad bruta"),
         ("gastos_fijos", "Gastos fijos"),
+        ("gastos_variables", "Gastos variables"),
         ("nomina_total", "Nómina"),
         ("utilidad_operacional", "Utilidad operacional"),
         ("impuesto_consumo", "Impuesto al consumo"),

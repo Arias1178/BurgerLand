@@ -32,6 +32,13 @@ def _is_paid(item: object) -> bool:
     return bool(getattr(item, "pagado", False))
 
 
+def _debt_payment(item: Debt) -> Decimal:
+    installment = _decimal(item.cuota_mensual)
+    if installment > 0:
+        return installment
+    return _decimal(item.abono_capital) + _decimal(item.pago_interes)
+
+
 @dataclass(frozen=True)
 class PnlResult:
     ingresos_totales: Decimal
@@ -164,13 +171,24 @@ class FinancialEngine:
         # Las ventas no cobradas no son liquidez; una factura de gasto
         # pendiente sí representa una obligación que el flujo debe mostrar.
         transaction_outflows = sum(
-            (_decimal(item.monto) for item in period_transactions if item.tipo != "ingreso"),
+            (
+                _decimal(item.monto)
+                for item in period_transactions
+                if item.tipo != "ingreso" and _is_paid(item)
+            ),
             Decimal(0),
         )
         service_outflows = sum(
             (_decimal(item.monto) for item in self.services
              if getattr(item, "incluido_en_calculo", True) is not False
+             and _is_paid(item)
              and _in_period(item, start_date, end_date)),
+            Decimal(0),
+        )
+        debt_payments = sum(
+            (_debt_payment(item) for item in self.debts
+             if getattr(item, "incluido_en_calculo", True) is not False
+             and _is_paid(item) and _in_period(item, start_date, end_date)),
             Decimal(0),
         )
         principal = sum(
@@ -180,13 +198,19 @@ class FinancialEngine:
             Decimal(0),
         )
         # El capital no es gasto en P&L, pero sí una salida real de efectivo.
-        outflows = transaction_outflows + service_outflows + principal
+        outflows = transaction_outflows + service_outflows + debt_payments
         pending = sum(
             (_decimal(item.monto) for item in period_transactions if not _is_paid(item)),
             Decimal(0),
         )
         pending += sum(
             (_decimal(item.monto) for item in self.services
+             if getattr(item, "incluido_en_calculo", True) is not False
+             and not _is_paid(item) and _in_period(item, start_date, end_date)),
+            Decimal(0),
+        )
+        pending += sum(
+            (_debt_payment(item) for item in self.debts
              if getattr(item, "incluido_en_calculo", True) is not False
              and not _is_paid(item) and _in_period(item, start_date, end_date)),
             Decimal(0),
@@ -199,9 +223,13 @@ class FinancialEngine:
             pending.quantize(MONEY),
         )
 
-    def calculate_break_even(self) -> Decimal:
+    def calculate_break_even(
+        self,
+        start_date: dt.date = dt.date.min,
+        end_date: dt.date = dt.date.max,
+    ) -> Decimal:
         """Retorna ventas necesarias: costos fijos / margen de contribución."""
-        pnl = self.calculate_pnl(dt.date.min, dt.date.max)
+        pnl = self.calculate_pnl(start_date, end_date)
         variable_costs = pnl.costos_variables_directos
         revenue = pnl.ingresos_totales
         if revenue <= 0:
