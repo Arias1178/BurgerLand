@@ -34,6 +34,14 @@ def registrar_compra(db: Session, proveedor_id: int, lineas: list[dict]) -> comp
                 raise ValueError(
                     "El ítem seleccionado no existe en inventario. Regístralo primero desde Inventario."
                 )
+            if item.estado != "ACTIVO":
+                raise ValueError(
+                    f"El ítem {item.nombre} está inhabilitado o eliminado."
+                )
+            if item.id_proveedor not in (None, proveedor_id):
+                raise ValueError(
+                    f"El ítem {item.nombre} pertenece a otro proveedor."
+                )
 
             cantidad = int(linea["cantidad"])
             precio = float(linea["precio"])
@@ -42,7 +50,18 @@ def registrar_compra(db: Session, proveedor_id: int, lineas: list[dict]) -> comp
 
             subtotal = cantidad * precio
             total += subtotal
-            item.cantidad += cantidad
+            cantidad_anterior = item.cantidad
+            cantidad_total = cantidad_anterior + cantidad
+            item.costo_unitario = (
+                (
+                    cantidad_anterior * item.costo_unitario
+                    + cantidad * precio
+                )
+                / cantidad_total
+                if cantidad_total
+                else 0
+            )
+            item.cantidad = cantidad_total
             detalles.append(
                 detalles_compras(
                     cantidad=cantidad,

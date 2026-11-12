@@ -1,21 +1,22 @@
 import os
 import calendar
+import math
 from collections import defaultdict
 from pathlib import Path
 import datetime as dt
 
 import flet as ft
 import flet.canvas as fcanvas
-from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.graphics.charts.barcharts import HorizontalBarChart, VerticalBarChart
 from reportlab.graphics.charts.legends import Legend
 from reportlab.graphics.charts.piecharts import Pie
-from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.shapes import Drawing, String
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from database.database import SessionLocal
 from database.models import (
@@ -24,12 +25,17 @@ from database.models import (
     Service,
     Transaction,
     detalle_ventas,
+    estado_ventas,
     informes,
     metodos_pago,
     productos,
     ventas,
 )
 from services.financial_engine import FinancialEngine
+
+
+ALTURA_ENCABEZADO_PDF = 72
+MARGEN_SUPERIOR_REPORTE_PDF = 90
 
 
 def _formatear_pesos(valor):
@@ -61,6 +67,22 @@ _PALETA_GRAFICOS = ["#F2C744", "#7AE582", "#7ABAFB", "#FF7B7B", "#C792EA", "#5AD
 
 def _total_general(informe):
     return float(informe.ventas_totales) - float(informe.total_proveedores)
+
+
+def _filtro_ventas_no_anuladas(db):
+    anulada = (
+        db.query(estado_ventas)
+        .filter(estado_ventas.nombre == "ANULADA")
+        .first()
+    )
+    if anulada is None:
+        return []
+    return [
+        or_(
+            ventas.id_estado_ventas.is_(None),
+            ventas.id_estado_ventas != anulada.id_estado_venta,
+        )
+    ]
 
 
 def _grafico_barras(items, color="#F2C744", max_alto=150, formateador=None, ancho_barra=44):
@@ -126,7 +148,7 @@ def _grafico_pastel(items, tamano=170, formateador_valor=None):
     angulo_actual = 0.0
     for indice, (_, valor) in enumerate(items):
         color = _PALETA_GRAFICOS[indice % len(_PALETA_GRAFICOS)]
-        angulo_barrido = 360 * (valor / total)
+        angulo_barrido = 2 * math.pi * (valor / total)
         figuras.append(
             fcanvas.Arc(
                 x=5,
@@ -173,26 +195,43 @@ def _obtener_analisis_negocio(fecha_inicio=None, fecha_fin=None):
             inicio_dt = dt.datetime.combine(fecha_inicio, dt.time.min)
             fin_dt = dt.datetime.combine(fecha_fin, dt.time.max)
             filtro_fecha = [ventas.fecha_hora >= inicio_dt, ventas.fecha_hora <= fin_dt]
+        filtro_ventas = [*filtro_fecha, *_filtro_ventas_no_anuladas(db)]
 
-        total_ventas = db.query(func.coalesce(func.sum(ventas.total), 0)).filter(*filtro_fecha).scalar() or 0
+        total_ventas = db.query(func.coalesce(func.sum(ventas.total), 0)).filter(*filtro_ventas).scalar() or 0
+        cantidad_ventas = db.query(ventas).filter(*filtro_ventas).count()
+        primera_venta, ultima_venta = db.query(
+            func.min(ventas.fecha_hora), func.max(ventas.fecha_hora)
+        ).filter(*filtro_ventas).one()
+        if fecha_inicio is not None and fecha_fin is not None:
+            periodo = f"{fecha_inicio.strftime('%d/%m/%Y')} - {fecha_fin.strftime('%d/%m/%Y')}"
+        elif primera_venta and ultima_venta:
+            periodo = (
+                f"Histórico: {primera_venta.strftime('%d/%m/%Y')} - "
+                f"{ultima_venta.strftime('%d/%m/%Y')}"
+            )
+        else:
+            periodo = "Sin ventas registradas"
         total_unidades = db.query(func.coalesce(func.sum(detalle_ventas.cantidad), 0)).join(
             ventas, detalle_ventas.id_venta == ventas.id_venta
-        ).filter(*filtro_fecha).scalar() or 0
+        ).filter(*filtro_ventas).scalar() or 0
         ticket_promedio = 0
-        total_ventas_registradas = db.query(ventas).filter(*filtro_fecha).count()
-        if total_ventas_registradas:
-            ticket_promedio = float(total_ventas) / float(total_ventas_registradas)
+        if cantidad_ventas:
+            ticket_promedio = float(total_ventas) / float(cantidad_ventas)
 
         metodo_totales = {}
+        metodo_cantidades = {}
         for metodo in db.query(metodos_pago).all():
             metodo_totales[metodo.nombre] = float(
                 db.query(func.coalesce(func.sum(ventas.total), 0)).filter(
-                    ventas.id_metodos_pagos == metodo.id_metodos_pago, *filtro_fecha
+                    ventas.id_metodos_pagos == metodo.id_metodos_pago, *filtro_ventas
                 ).scalar() or 0
             )
+            metodo_cantidades[metodo.nombre] = db.query(ventas).filter(
+                ventas.id_metodos_pagos == metodo.id_metodos_pago, *filtro_ventas
+            ).count()
 
         productos_ventas = defaultdict(lambda: {"cantidad": 0, "ventas": 0.0})
-        detalles_query = db.query(detalle_ventas).join(ventas, detalle_ventas.id_venta == ventas.id_venta).filter(*filtro_fecha)
+        detalles_query = db.query(detalle_ventas).join(ventas, detalle_ventas.id_venta == ventas.id_venta).filter(*filtro_ventas)
         for detalle in detalles_query.all():
             producto = db.query(productos).filter(productos.id_producto == detalle.id_producto).first()
             if not producto:
@@ -214,12 +253,42 @@ def _obtener_analisis_negocio(fecha_inicio=None, fecha_fin=None):
         )
         top_productos = productos_ordenados[:5]
         menos_vendidos = sorted(productos_ordenados, key=lambda item: item["cantidad"])[:5]
+        ventas_por_tipo = {
+            tipo or "MOSTRADOR": int(cantidad)
+            for tipo, cantidad in (
+                db.query(ventas.tipo_pedido, func.count(ventas.id_venta))
+                .filter(*filtro_ventas)
+                .group_by(ventas.tipo_pedido)
+                .all()
+            )
+        }
+        domicilios = db.query(ventas).filter(
+            ventas.tipo_pedido == "DOMICILIO",
+            *filtro_ventas,
+        )
+        cantidad_domicilios = domicilios.count()
+        ingresos_domicilios = float(
+            db.query(func.coalesce(func.sum(ventas.valor_domicilio), 0))
+            .filter(ventas.tipo_pedido == "DOMICILIO", *filtro_ventas)
+            .scalar()
+            or 0
+        )
+        domicilios_entregados = domicilios.filter(
+            ventas.estado_domicilio == "ENTREGADO"
+        ).count()
 
         return {
             "total_ventas": float(total_ventas),
+            "cantidad_ventas": cantidad_ventas,
             "total_unidades": int(total_unidades),
             "ticket_promedio": float(ticket_promedio),
+            "periodo": periodo,
             "metodo_totales": metodo_totales,
+            "metodo_cantidades": metodo_cantidades,
+            "ventas_por_tipo": ventas_por_tipo,
+            "cantidad_domicilios": cantidad_domicilios,
+            "ingresos_domicilios": ingresos_domicilios,
+            "domicilios_entregados": domicilios_entregados,
             "top_productos": top_productos,
             "menos_vendidos": menos_vendidos,
             "productos_detalle": {
@@ -239,19 +308,23 @@ def _obtener_resumen_contabilidad_periodo(fecha_inicio, fecha_fin):
             payroll=db.query(Payroll).all(),
             debts=db.query(Debt).all(),
             services=db.query(Service).all(),
-            sales=db.query(ventas).all(),
+            sales=db.query(ventas).filter(*_filtro_ventas_no_anuladas(db)).all(),
         )
         pnl = engine.calculate_pnl(fecha_inicio, fecha_fin)
         cash = engine.calculate_cash_flow(fecha_inicio, fecha_fin)
         return {
             "ingresos": float(pnl.ingresos_totales),
             "costos_variables": float(pnl.costos_variables_directos),
+            "utilidad_bruta": float(pnl.utilidad_bruta),
             "gastos_fijos": float(pnl.gastos_fijos_operativos),
+            "utilidad_operativa": float(pnl.utilidad_operativa),
             "gastos_financieros": float(pnl.gastos_financieros),
             "utilidad_neta": float(pnl.utilidad_neta),
             "flujo_neto": float(cash.flujo_neto),
             "entradas_caja": float(cash.entradas),
             "salidas_caja": float(cash.salidas),
+            "abonos_capital": float(cash.abonos_capital),
+            "cuentas_pendientes": float(cash.cuentas_pendientes),
             "periodo": f"{fecha_inicio.strftime('%d/%m/%Y')} - {fecha_fin.strftime('%d/%m/%Y')}",
         }
     finally:
@@ -325,13 +398,13 @@ def _variacion_porcentual(actual, anterior):
     actual = float(actual or 0)
     anterior = float(anterior or 0)
     if anterior == 0:
-        return None if actual == 0 else 100.0
+        return None
     return ((actual - anterior) / abs(anterior)) * 100
 
 
 def _indicador_variacion(variacion):
     if variacion is None:
-        return "Sin datos previos", "#9AA0B4"
+        return "Sin base comparable", "#9AA0B4"
     if variacion > 0.05:
         return f"▲ {variacion:.1f}%", "#7AE582"
     if variacion < -0.05:
@@ -345,21 +418,21 @@ def _obtener_comparativo_negocio(periodo_actual, periodo_anterior):
 
     metricas = {
         "ventas": {
-            "nombre": "Ventas totales",
+            "nombre": "Ventas totales (COP)",
             "actual": actual["total_ventas"],
             "anterior": anterior["total_ventas"],
             "variacion": _variacion_porcentual(actual["total_ventas"], anterior["total_ventas"]),
             "formato": "pesos",
         },
         "unidades": {
-            "nombre": "Unidades vendidas",
+            "nombre": "Unidades vendidas (unidades)",
             "actual": actual["total_unidades"],
             "anterior": anterior["total_unidades"],
             "variacion": _variacion_porcentual(actual["total_unidades"], anterior["total_unidades"]),
             "formato": "entero",
         },
         "ticket_promedio": {
-            "nombre": "Ticket promedio",
+            "nombre": "Ticket promedio (COP)",
             "actual": actual["ticket_promedio"],
             "anterior": anterior["ticket_promedio"],
             "variacion": _variacion_porcentual(actual["ticket_promedio"], anterior["ticket_promedio"]),
@@ -397,12 +470,12 @@ def _obtener_comparativo_contabilidad(periodo_actual, periodo_anterior):
     anterior = _obtener_resumen_contabilidad_periodo(periodo_anterior["inicio"], periodo_anterior["fin"])
 
     campos = [
-        ("ingresos", "Ingresos"),
-        ("costos_variables", "Costos variables"),
-        ("gastos_fijos", "Gastos fijos"),
-        ("gastos_financieros", "Gastos financieros"),
-        ("utilidad_neta", "Utilidad neta"),
-        ("flujo_neto", "Flujo neto de caja"),
+        ("ingresos", "Ingresos (COP)"),
+        ("costos_variables", "Costos variables (COP)"),
+        ("gastos_fijos", "Gastos fijos (COP)"),
+        ("gastos_financieros", "Gastos financieros (COP)"),
+        ("utilidad_neta", "Utilidad neta (COP)"),
+        ("flujo_neto", "Flujo neto calculado (COP)"),
     ]
     metricas = {
         clave: {
@@ -480,14 +553,11 @@ def _grafico_comparativo_horizontal(metricas, color_actual="#F2C744", color_ante
     return ft.Column(spacing=12, controls=filas)
 
 
-def _grafico_comparativo_pdf(metricas, ancho=470, alto=230, color_anterior=None, color_actual=None):
-    """Gráfica de barras agrupadas (ReportLab) comparando periodo anterior vs actual."""
-    metricas = list(metricas)
+def _grafico_comparativo_pdf(metricas, ancho=470, alto=230):
+    """Grafica la variación porcentual, evitando comparar importes y unidades en una escala."""
+    metricas = [m for m in metricas if m.get("variacion") is not None]
     if not metricas:
         return None
-
-    color_anterior = color_anterior or colors.HexColor("#8A90A6")
-    color_actual = color_actual or colors.HexColor("#2E3344")
 
     drawing = Drawing(ancho, alto)
     grafico = VerticalBarChart()
@@ -495,32 +565,31 @@ def _grafico_comparativo_pdf(metricas, ancho=470, alto=230, color_anterior=None,
     grafico.y = 45
     grafico.width = ancho - 90
     grafico.height = alto - 90
-    grafico.data = [
-        [m["anterior"] for m in metricas],
-        [m["actual"] for m in metricas],
-    ]
+    variaciones = [float(m["variacion"]) for m in metricas]
+    grafico.data = [variaciones]
     grafico.categoryAxis.categoryNames = [
-        (m["nombre"] if len(m["nombre"]) <= 16 else m["nombre"][:14] + "…") for m in metricas
+        (m["nombre"] if len(m["nombre"]) <= 16 else m["nombre"][:14] + "…")
+        for m in metricas
     ]
     grafico.categoryAxis.labels.fontSize = 8
     grafico.categoryAxis.labels.boxAnchor = "n"
     grafico.valueAxis.labels.fontSize = 8
-    grafico.bars[0].fillColor = color_anterior
-    grafico.bars[1].fillColor = color_actual
+    grafico.valueAxis.valueMin = min(0, min(variaciones))
+    grafico.valueAxis.valueMax = max(0, max(variaciones))
+    if grafico.valueAxis.valueMin == grafico.valueAxis.valueMax:
+        grafico.valueAxis.valueMax = 1
+    grafico.bars[0].fillColor = colors.HexColor("#7ABAFB")
     grafico.barWidth = 10
     grafico.groupSpacing = 16
     drawing.add(grafico)
-
-    leyenda = Legend()
-    leyenda.x = ancho - 150
-    leyenda.y = alto - 10
-    leyenda.dx = 8
-    leyenda.dy = 8
-    leyenda.fontName = "Helvetica"
-    leyenda.fontSize = 9
-    leyenda.alignment = "right"
-    leyenda.colorNamePairs = [(color_anterior, "Periodo anterior"), (color_actual, "Periodo actual")]
-    drawing.add(leyenda)
+    drawing.add(String(
+        50, alto - 14, "Variación porcentual frente al periodo anterior",
+        fontName="Helvetica-Bold", fontSize=10, fillColor=colors.HexColor("#2E3344"),
+    ))
+    drawing.add(String(
+        50, 20, "Eje vertical: cambio porcentual (%)",
+        fontName="Helvetica", fontSize=8, fillColor=colors.HexColor("#5A5F72"),
+    ))
 
     return drawing
 
@@ -528,40 +597,54 @@ def _grafico_comparativo_pdf(metricas, ancho=470, alto=230, color_anterior=None,
 def _encabezado_pdf(canvas, doc, titulo, fecha_texto):
     canvas.saveState()
     width, height = letter
+    ancho_texto = width - 80
+    fuente_titulo = "Helvetica-Bold"
+    tamano_titulo = min(
+        18,
+        18 * ancho_texto / max(canvas.stringWidth(titulo, fuente_titulo, 18), 1),
+    )
+    fuente_detalle = "Helvetica"
+    texto_pagina = f"Página {doc.page}"
+    ancho_detalle = width - 92 - canvas.stringWidth(texto_pagina, fuente_detalle, 9)
+    tamano_detalle = min(
+        10,
+        10 * ancho_detalle / max(canvas.stringWidth(fecha_texto, fuente_detalle, 10), 1),
+    )
     canvas.setFillColor(colors.HexColor("#2E3344"))
-    canvas.rect(0, height - 72, width, 72, stroke=0, fill=1)
+    canvas.rect(0, height - ALTURA_ENCABEZADO_PDF, width, ALTURA_ENCABEZADO_PDF, stroke=0, fill=1)
     canvas.setFillColor(colors.white)
-    canvas.setFont("Helvetica-Bold", 18)
+    canvas.setFont(fuente_titulo, tamano_titulo)
     canvas.drawString(40, height - 34, titulo)
-    canvas.setFont("Helvetica", 10)
+    canvas.setFont(fuente_detalle, tamano_detalle)
     canvas.drawString(40, height - 50, fecha_texto)
     canvas.setFont("Helvetica", 9)
-    canvas.drawRightString(width - 40, height - 50, f"Página {doc.page}")
+    canvas.drawRightString(width - 40, height - 50, texto_pagina)
     canvas.restoreState()
 
 
 _PALETA_PDF = [colors.HexColor(c) for c in _PALETA_GRAFICOS]
 
 
-def _grafico_barras_pdf(pares, ancho=470, alto=200, color_barra=None, forzar_min_cero=True):
-    """Construye una gráfica de barras verticales (ReportLab) para incluir en el PDF."""
+def _grafico_barras_pdf(
+    pares, ancho=470, alto=200, color_barra=None, forzar_min_cero=True,
+    titulo="Comparación de valores", unidad="Valor",
+):
+    """Construye una gráfica de barras horizontales con nombres de categoría completos."""
     pares = [(str(nombre), float(valor or 0)) for nombre, valor in pares]
     if not pares:
         return None
 
     color_barra = color_barra or colors.HexColor("#2E3344")
     drawing = Drawing(ancho, alto)
-    grafico = VerticalBarChart()
-    grafico.x = 50
+    grafico = HorizontalBarChart()
+    grafico.x = 150
     grafico.y = 35
-    grafico.width = ancho - 90
+    grafico.width = ancho - 170
     grafico.height = alto - 65
     grafico.data = [[valor for _, valor in pares]]
-    grafico.categoryAxis.categoryNames = [
-        (nombre if len(nombre) <= 14 else nombre[:12] + "…") for nombre, _ in pares
-    ]
-    grafico.categoryAxis.labels.fontSize = 8
-    grafico.categoryAxis.labels.boxAnchor = "n"
+    grafico.categoryAxis.categoryNames = [nombre for nombre, _ in pares]
+    grafico.categoryAxis.labels.fontSize = 7
+    grafico.categoryAxis.labels.boxAnchor = "e"
     grafico.valueAxis.labels.fontSize = 8
     grafico.bars[0].fillColor = color_barra
     grafico.barWidth = 12
@@ -569,10 +652,18 @@ def _grafico_barras_pdf(pares, ancho=470, alto=200, color_barra=None, forzar_min
     if forzar_min_cero:
         grafico.valueAxis.valueMin = 0
     drawing.add(grafico)
+    drawing.add(String(
+        50, alto - 14, titulo,
+        fontName="Helvetica-Bold", fontSize=10, fillColor=colors.HexColor("#2E3344"),
+    ))
+    drawing.add(String(
+        150, 18, f"Eje horizontal: {unidad}",
+        fontName="Helvetica", fontSize=8, fillColor=colors.HexColor("#5A5F72"),
+    ))
     return drawing
 
 
-def _grafico_pastel_pdf(pares, ancho=470, alto=210):
+def _grafico_pastel_pdf(pares, ancho=470, alto=210, titulo="Distribución"):
     """Construye una gráfica de pastel con leyenda de porcentajes (ReportLab)."""
     pares = [(str(nombre), float(valor or 0)) for nombre, valor in pares if valor and float(valor) > 0]
     if not pares:
@@ -580,6 +671,10 @@ def _grafico_pastel_pdf(pares, ancho=470, alto=210):
 
     total = sum(valor for _, valor in pares) or 1
     drawing = Drawing(ancho, alto)
+    drawing.add(String(
+        20, alto - 14, titulo,
+        fontName="Helvetica-Bold", fontSize=10, fillColor=colors.HexColor("#2E3344"),
+    ))
 
     pastel = Pie()
     pastel.x = 40
@@ -603,7 +698,10 @@ def _grafico_pastel_pdf(pares, ancho=470, alto=210):
     leyenda.alignment = "right"
     leyenda.columnMaximum = len(pares)
     leyenda.colorNamePairs = [
-        (_PALETA_PDF[i % len(_PALETA_PDF)], f"{nombre}: {valor / total * 100:.1f}%")
+        (
+            _PALETA_PDF[i % len(_PALETA_PDF)],
+            f"{nombre}: {_formatear_pesos(valor)} ({valor / total * 100:.1f}%)",
+        )
         for i, (nombre, valor) in enumerate(pares)
     ]
     drawing.add(leyenda)
@@ -617,24 +715,6 @@ def _generar_pdf_informe(informe):
     ruta = carpeta / nombre_archivo
 
     estilos = getSampleStyleSheet()
-    titulo_estilo = ParagraphStyle(
-        "TituloReporte",
-        parent=estilos["Title"],
-        alignment=TA_CENTER,
-        fontName="Helvetica-Bold",
-        fontSize=22,
-        textColor=colors.HexColor("#2E3344"),
-        spaceAfter=8,
-    )
-    subtitulo_estilo = ParagraphStyle(
-        "SubtituloReporte",
-        parent=estilos["BodyText"],
-        alignment=TA_CENTER,
-        fontName="Helvetica",
-        fontSize=11,
-        textColor=colors.HexColor("#5A5F72"),
-        spaceAfter=12,
-    )
     seccion_estilo = ParagraphStyle(
         "SeccionReporte",
         parent=estilos["Heading2"],
@@ -658,8 +738,6 @@ def _generar_pdf_informe(informe):
     )
 
     contenido = []
-    contenido.append(Paragraph("REPORTE DE CAJA", titulo_estilo))
-    contenido.append(Paragraph(f"Fecha del reporte: {informe.fecha.strftime('%d/%m/%Y')}", subtitulo_estilo))
 
     resumen_caja = Table(
         [
@@ -673,11 +751,14 @@ def _generar_pdf_informe(informe):
     resumen_caja.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F8FC")),
-                ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, colors.HexColor("#F7F8FC")]),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E3344")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F7F8FC")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F8FC")]),
                 ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#2E3344")),
-                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                ("FONTNAME", (1, 0), (1, -1), "Helvetica-Bold"),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+                ("FONTNAME", (1, 1), (1, -1), "Helvetica-Bold"),
                 ("ALIGN", (1, 0), (1, -1), "RIGHT"),
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D3D8E3")),
                 ("TOPPADDING", (0, 0), (-1, -1), 8),
@@ -688,11 +769,13 @@ def _generar_pdf_informe(informe):
 
     resumen_ventas = Table(
         [
+            ["Medio de pago", "Ventas (COP)"],
             ["Efectivo", _formatear_pesos(informe.total_efectivo)],
             ["Tarjeta", _formatear_pesos(informe.total_tarjeta)],
             ["Nequi", _formatear_pesos(informe.total_nequi)],
         ],
         colWidths=[220, 220],
+        repeatRows=1,
     )
     resumen_ventas.setStyle(
         TableStyle(
@@ -730,7 +813,7 @@ def _generar_pdf_informe(informe):
     )
 
     total_general = Table(
-        [["TOTAL GENERAL", _formatear_pesos(_total_general(informe))]],
+        [["Ventas menos costos de proveedores", _formatear_pesos(_total_general(informe))]],
         colWidths=[220, 220],
     )
     total_general.setStyle(
@@ -753,11 +836,28 @@ def _generar_pdf_informe(informe):
     contenido.append(Spacer(1, 10))
     contenido.append(Paragraph("RESUMEN DE VENTAS", seccion_estilo))
     contenido.append(resumen_ventas)
+    grafico_medios_pago = _grafico_pastel_pdf(
+        [
+            ("Efectivo", informe.total_efectivo),
+            ("Tarjeta", informe.total_tarjeta),
+            ("Nequi", informe.total_nequi),
+        ],
+        titulo="Distribución de ventas entre medios de pago registrados (COP)",
+    )
+    if grafico_medios_pago is not None:
+        contenido.append(Spacer(1, 10))
+        contenido.append(grafico_medios_pago)
     contenido.append(Spacer(1, 10))
     contenido.append(Paragraph("RESUMEN DE PROVEEDORES", seccion_estilo))
     contenido.append(resumen_proveedores)
     contenido.append(Spacer(1, 16))
     contenido.append(total_general)
+    contenido.append(Spacer(1, 6))
+    contenido.append(Paragraph(
+        "El saldo final corresponde al saldo inicial más las ventas en efectivo. "
+        "El resultado de ventas menos costos de proveedores no incluye otros gastos operativos.",
+        estilos["BodyText"],
+    ))
 
     def pie(canvas, doc):
         canvas.saveState()
@@ -784,29 +884,15 @@ def _generar_pdf_reporte_negocio(datos):
 
     estilos = getSampleStyleSheet()
     contenido = []
-    contenido.append(Paragraph("REPORTE GENERAL DEL NEGOCIO", ParagraphStyle(
-        "TituloNegocio",
-        parent=estilos["Title"],
-        alignment=TA_CENTER,
-        fontName="Helvetica-Bold",
-        fontSize=20,
-        textColor=colors.HexColor("#2E3344"),
-        spaceAfter=10,
-    )))
-    contenido.append(Paragraph(f"Periodo: {dt.date.today().strftime('%d/%m/%Y')}", ParagraphStyle(
-        "SubtituloNegocio",
-        parent=estilos["BodyText"],
-        fontName="Helvetica",
-        fontSize=10,
-        textColor=colors.HexColor("#5A5F72"),
-        spaceAfter=14,
-    )))
-
     resumen = Table(
         [
             ["Ventas totales", _formatear_pesos(datos["total_ventas"])],
-            ["Productos vendidos", str(datos["total_unidades"])],
+            ["Transacciones registradas", str(datos["cantidad_ventas"])],
+            ["Unidades vendidas", str(datos["total_unidades"])],
             ["Ticket promedio", _formatear_pesos(datos["ticket_promedio"])],
+            ["Domicilios registrados", str(datos["cantidad_domicilios"])],
+            ["Ingresos por domicilios", _formatear_pesos(datos["ingresos_domicilios"])],
+            ["Domicilios entregados", str(datos["domicilios_entregados"])],
         ],
         colWidths=[220, 220],
     )
@@ -830,6 +916,35 @@ def _generar_pdf_reporte_negocio(datos):
         spaceAfter=8,
     )))
     contenido.append(resumen)
+    contenido.append(Spacer(1, 10))
+    contenido.append(Paragraph("Ventas por tipo de pedido", ParagraphStyle(
+        "SeccionTiposPedido",
+        parent=estilos["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=13,
+        textColor=colors.white,
+        backColor=colors.HexColor("#2E3344"),
+        borderPadding=6,
+        spaceBefore=8,
+        spaceAfter=8,
+    )))
+    filas_tipos = [["Tipo de pedido", "Transacciones"]]
+    filas_tipos.extend(
+        [tipo.replace("_", " ").title(), str(cantidad)]
+        for tipo, cantidad in sorted(datos["ventas_por_tipo"].items())
+    )
+    tabla_tipos = Table(filas_tipos, colWidths=[220, 220], repeatRows=1)
+    tabla_tipos.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E3344")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F7F8FC")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D3D8E3")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ALIGN", (1, 1), (1, -1), "RIGHT"),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    contenido.append(tabla_tipos)
 
     if datos["metodo_totales"]:
         contenido.append(Spacer(1, 10))
@@ -844,18 +959,34 @@ def _generar_pdf_reporte_negocio(datos):
             spaceBefore=8,
             spaceAfter=8,
         )))
-        filas_metodos = [[nombre, _formatear_pesos(valor)] for nombre, valor in datos["metodo_totales"].items() if valor > 0]
-        tabla_metodos = Table(filas_metodos, colWidths=[220, 220])
+        total_metodos = sum(datos["metodo_totales"].values()) or 1
+        filas_metodos = [["Medio de pago", "Transacciones", "Ventas (COP)", "Participación"]]
+        filas_metodos.extend(
+            [
+                nombre,
+                str(datos["metodo_cantidades"].get(nombre, 0)),
+                _formatear_pesos(valor),
+                f"{valor / total_metodos * 100:.1f}%",
+            ]
+            for nombre, valor in datos["metodo_totales"].items()
+            if valor > 0
+        )
+        tabla_metodos = Table(filas_metodos, colWidths=[150, 85, 125, 70], repeatRows=1)
         tabla_metodos.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F8FC")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E3344")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F7F8FC")),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D3D8E3")),
-            ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
             ("TOPPADDING", (0, 0), (-1, -1), 8),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ]))
         contenido.append(tabla_metodos)
-        grafico_metodos = _grafico_pastel_pdf(list(datos["metodo_totales"].items()))
+        grafico_metodos = _grafico_pastel_pdf(
+            list(datos["metodo_totales"].items()),
+            titulo="Participación de ventas por medio de pago (COP)",
+        )
         if grafico_metodos is not None:
             contenido.append(Spacer(1, 12))
             contenido.append(grafico_metodos)
@@ -873,13 +1004,19 @@ def _generar_pdf_reporte_negocio(datos):
             spaceBefore=8,
             spaceAfter=8,
         )))
-        filas_top = [[item["nombre"], str(item["cantidad"]), _formatear_pesos(item["ventas"])] for item in datos["top_productos"]]
-        tabla_top = Table(filas_top, colWidths=[200, 100, 140])
+        filas_top = [["Producto", "Unidades", "Ventas (COP)"]]
+        filas_top.extend(
+            [item["nombre"], str(item["cantidad"]), _formatear_pesos(item["ventas"])]
+            for item in datos["top_productos"]
+        )
+        tabla_top = Table(filas_top, colWidths=[200, 100, 140], repeatRows=1)
         tabla_top.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F8FC")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E3344")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F7F8FC")),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D3D8E3")),
-            ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-            ("ALIGN", (1, 0), (1, -1), "CENTER"),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("ALIGN", (1, 1), (1, -1), "CENTER"),
             ("ALIGN", (2, 0), (2, -1), "RIGHT"),
             ("TOPPADDING", (0, 0), (-1, -1), 8),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
@@ -888,6 +1025,8 @@ def _generar_pdf_reporte_negocio(datos):
         grafico_top = _grafico_barras_pdf(
             [(item["nombre"], item["cantidad"]) for item in datos["top_productos"]],
             color_barra=colors.HexColor("#7AE582"),
+            titulo="Unidades vendidas por producto (5 con más unidades)",
+            unidad="unidades vendidas",
         )
         if grafico_top is not None:
             contenido.append(Spacer(1, 12))
@@ -906,13 +1045,20 @@ def _generar_pdf_reporte_negocio(datos):
             spaceBefore=8,
             spaceAfter=8,
         )))
-        filas_low = [[item["nombre"], str(item["cantidad"])] for item in datos["menos_vendidos"]]
-        tabla_low = Table(filas_low, colWidths=[260, 120])
+        contenido.append(Paragraph(
+            "La clasificación considera únicamente productos con ventas registradas en el periodo.",
+            estilos["BodyText"],
+        ))
+        filas_low = [["Producto", "Unidades vendidas"]]
+        filas_low.extend([item["nombre"], str(item["cantidad"])] for item in datos["menos_vendidos"])
+        tabla_low = Table(filas_low, colWidths=[260, 120], repeatRows=1)
         tabla_low.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F8FC")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E3344")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F7F8FC")),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D3D8E3")),
-            ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-            ("ALIGN", (1, 0), (1, -1), "CENTER"),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("ALIGN", (1, 1), (1, -1), "CENTER"),
             ("TOPPADDING", (0, 0), (-1, -1), 8),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ]))
@@ -920,13 +1066,69 @@ def _generar_pdf_reporte_negocio(datos):
         grafico_low = _grafico_barras_pdf(
             [(item["nombre"], item["cantidad"]) for item in datos["menos_vendidos"]],
             color_barra=colors.HexColor("#FF7B7B"),
+            titulo="Unidades vendidas por producto (5 con menos unidades)",
+            unidad="unidades vendidas",
         )
         if grafico_low is not None:
             contenido.append(Spacer(1, 12))
             contenido.append(grafico_low)
 
-    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=54, bottomMargin=40)
-    documento.build(contenido, onFirstPage=lambda canvas, doc: _encabezado_pdf(canvas, doc, "REPORTE GENERAL DEL NEGOCIO", f"Fecha: {dt.date.today().strftime('%d/%m/%Y')}"), onLaterPages=lambda canvas, doc: _encabezado_pdf(canvas, doc, "REPORTE GENERAL DEL NEGOCIO", f"Fecha: {dt.date.today().strftime('%d/%m/%Y')}"))
+    if datos["productos_detalle"]:
+        contenido.append(Spacer(1, 12))
+        contenido.append(Paragraph(
+            "Detalle de ventas por producto", ParagraphStyle(
+                "SeccionDetalleProductos", parent=estilos["Heading2"],
+                fontName="Helvetica-Bold", fontSize=13, textColor=colors.white,
+                backColor=colors.HexColor("#2E3344"), borderPadding=6,
+                spaceBefore=8, spaceAfter=8,
+            )
+        ))
+        contenido.append(Paragraph(
+            "Incluye todos los productos con al menos una venta en el periodo; "
+            "el porcentaje se calcula sobre las ventas totales del periodo.",
+            estilos["BodyText"],
+        ))
+        total_ventas = float(datos["total_ventas"]) or 1
+        filas_productos = [["Producto", "Unidades", "Ventas (COP)", "Participación"]]
+        productos_detalle = sorted(
+            datos["productos_detalle"].items(),
+            key=lambda item: item[1]["ventas"],
+            reverse=True,
+        )
+        filas_productos.extend(
+            [
+                nombre,
+                str(detalle["cantidad"]),
+                _formatear_pesos(detalle["ventas"]),
+                f"{detalle['ventas'] / total_ventas * 100:.1f}%",
+            ]
+            for nombre, detalle in productos_detalle
+        )
+        tabla_productos = Table(
+            filas_productos, colWidths=[190, 75, 120, 75], repeatRows=1
+        )
+        tabla_productos.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E3344")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F7F8FC")),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D3D8E3")),
+            ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        contenido.append(tabla_productos)
+
+    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=MARGEN_SUPERIOR_REPORTE_PDF, bottomMargin=40)
+    documento.build(
+        contenido,
+        onFirstPage=lambda canvas, doc: _encabezado_pdf(
+            canvas, doc, "REPORTE GENERAL DEL NEGOCIO", f"Periodo: {datos['periodo']}"
+        ),
+        onLaterPages=lambda canvas, doc: _encabezado_pdf(
+            canvas, doc, "REPORTE GENERAL DEL NEGOCIO", f"Periodo: {datos['periodo']}"
+        ),
+    )
     return str(archivo)
 
 
@@ -937,37 +1139,27 @@ def _generar_pdf_reporte_contabilidad(datos):
 
     estilos = getSampleStyleSheet()
     contenido = []
-    contenido.append(Paragraph("REPORTE DE CONTABILIDAD", ParagraphStyle(
-        "TituloContabilidad",
-        parent=estilos["Title"],
-        alignment=TA_CENTER,
-        fontName="Helvetica-Bold",
-        fontSize=20,
-        textColor=colors.HexColor("#2E3344"),
-        spaceAfter=10,
-    )))
-    contenido.append(Paragraph(f"Periodo: {datos['periodo']}", ParagraphStyle(
-        "SubtituloContabilidad",
-        parent=estilos["BodyText"],
-        fontName="Helvetica",
-        fontSize=10,
-        textColor=colors.HexColor("#5A5F72"),
-        spaceAfter=14,
-    )))
-
-    ingresos = Table([
+    resultados = Table([
+        ["Indicador", "Valor (COP)"],
         ["Ingresos totales", _formatear_pesos(datos["ingresos"])],
-        ["Entradas de caja", _formatear_pesos(datos["entradas_caja"])],
-    ], colWidths=[220, 220])
-    ingresos.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F8FC")),
+        ["Costos variables directos", _formatear_pesos(datos["costos_variables"])],
+        ["Utilidad bruta", _formatear_pesos(datos["utilidad_bruta"])],
+        ["Gastos fijos operativos", _formatear_pesos(datos["gastos_fijos"])],
+        ["Utilidad operativa", _formatear_pesos(datos["utilidad_operativa"])],
+        ["Gastos financieros", _formatear_pesos(datos["gastos_financieros"])],
+        ["Utilidad neta", _formatear_pesos(datos["utilidad_neta"])],
+    ], colWidths=[280, 160], repeatRows=1)
+    resultados.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E3344")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F7F8FC")),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D3D8E3")),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("ALIGN", (1, 0), (1, -1), "RIGHT"),
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
-    contenido.append(Paragraph("Ingresos", ParagraphStyle(
+    contenido.append(Paragraph("Estado de resultados (criterio contable)", ParagraphStyle(
         "SeccionContabilidad1",
         parent=estilos["Heading2"],
         fontName="Helvetica-Bold",
@@ -978,24 +1170,32 @@ def _generar_pdf_reporte_contabilidad(datos):
         spaceBefore=8,
         spaceAfter=8,
     )))
-    contenido.append(ingresos)
+    contenido.append(resultados)
+    contenido.append(Paragraph(
+        "Utilidad bruta = ingresos menos costos variables; utilidad operativa = utilidad bruta "
+        "menos gastos fijos; utilidad neta = utilidad operativa menos gastos financieros. "
+        "Los importes están expresados en pesos colombianos (COP).",
+        estilos["BodyText"],
+    ))
 
     egresos = Table([
-        ["Costos variables", _formatear_pesos(datos["costos_variables"])],
-        ["Gastos fijos", _formatear_pesos(datos["gastos_fijos"])],
+        ["Componente de egreso", "Valor (COP)"],
+        ["Costos variables directos", _formatear_pesos(datos["costos_variables"])],
+        ["Gastos fijos operativos", _formatear_pesos(datos["gastos_fijos"])],
         ["Gastos financieros", _formatear_pesos(datos["gastos_financieros"])],
-        ["Salidas de caja", _formatear_pesos(datos["salidas_caja"])],
-    ], colWidths=[220, 220])
+    ], colWidths=[280, 160], repeatRows=1)
     egresos.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F8FC")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E3344")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F7F8FC")),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D3D8E3")),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("ALIGN", (1, 0), (1, -1), "RIGHT"),
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
     contenido.append(Spacer(1, 10))
-    contenido.append(Paragraph("Egresos", ParagraphStyle(
+    contenido.append(Paragraph("Composición de costos y gastos", ParagraphStyle(
         "SeccionContabilidad2",
         parent=estilos["Heading2"],
         fontName="Helvetica-Bold",
@@ -1008,12 +1208,49 @@ def _generar_pdf_reporte_contabilidad(datos):
     )))
     contenido.append(egresos)
 
+    flujo_caja = Table([
+        ["Indicador de caja", "Valor (COP)"],
+        ["Entradas de caja", _formatear_pesos(datos["entradas_caja"])],
+        ["Salidas y obligaciones incluidas en el flujo", _formatear_pesos(datos["salidas_caja"])],
+        ["Abonos de capital pagados (no reducen utilidad)", _formatear_pesos(datos["abonos_capital"])],
+        ["Flujo neto calculado", _formatear_pesos(datos["flujo_neto"])],
+        ["Transacciones y servicios pendientes", _formatear_pesos(datos["cuentas_pendientes"])],
+    ], colWidths=[280, 160], repeatRows=1)
+    flujo_caja.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E3344")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F7F8FC")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D3D8E3")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    contenido.append(Spacer(1, 10))
+    contenido.append(Paragraph(
+        "Flujo de caja y obligaciones", ParagraphStyle(
+            "SeccionContabilidadCaja", parent=estilos["Heading2"],
+            fontName="Helvetica-Bold", fontSize=13, textColor=colors.white,
+            backColor=colors.HexColor("#2E3344"), borderPadding=6,
+            spaceBefore=8, spaceAfter=8,
+        )
+    ))
+    contenido.append(flujo_caja)
+    contenido.append(Paragraph(
+        "El flujo neto es entradas menos salidas calculadas por el motor financiero: las "
+        "salidas incluyen gastos y servicios del periodo aunque estén pendientes, además "
+        "de abonos pagados a capital. Estos abonos afectan el flujo, pero no la utilidad. "
+        "El saldo pendiente corresponde a transacciones y servicios; no incluye deuda pendiente.",
+        estilos["BodyText"],
+    ))
+
     grafico_egresos = _grafico_pastel_pdf(
         [
             ("Costos variables", datos["costos_variables"]),
             ("Gastos fijos", datos["gastos_fijos"]),
             ("Gastos financieros", datos["gastos_financieros"]),
-        ]
+        ],
+        titulo="Participación de costos y gastos contables (COP)",
     )
     if grafico_egresos is not None:
         contenido.append(Spacer(1, 10))
@@ -1039,6 +1276,8 @@ def _generar_pdf_reporte_contabilidad(datos):
         ],
         color_barra=colors.HexColor("#F2C744"),
         forzar_min_cero=False,
+        titulo="Ingresos, egresos contables y utilidad neta",
+        unidad="pesos colombianos (COP)",
     )
     if grafico_comparativo is not None:
         contenido.append(Spacer(1, 10))
@@ -1055,23 +1294,7 @@ def _generar_pdf_reporte_contabilidad(datos):
         )))
         contenido.append(grafico_comparativo)
 
-    total = Table([
-        ["Utilidad neta", _formatear_pesos(datos["utilidad_neta"])],
-        ["Flujo neto", _formatear_pesos(datos["flujo_neto"])],
-    ], colWidths=[220, 220])
-    total.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#2E3344")),
-        ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#F2C744")),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-    ]))
-    contenido.append(Spacer(1, 14))
-    contenido.append(total)
-
-    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=54, bottomMargin=40)
+    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=MARGEN_SUPERIOR_REPORTE_PDF, bottomMargin=40)
     documento.build(contenido, onFirstPage=lambda canvas, doc: _encabezado_pdf(canvas, doc, "REPORTE DE CONTABILIDAD", f"Periodo: {datos['periodo']}"), onLaterPages=lambda canvas, doc: _encabezado_pdf(canvas, doc, "REPORTE DE CONTABILIDAD", f"Periodo: {datos['periodo']}"))
     return str(archivo)
 
@@ -1095,7 +1318,7 @@ def _tabla_comparativa_pdf(metricas):
     for metrica in metricas.values():
         formateador = _formatear_pesos if metrica.get("formato") == "pesos" else (lambda v: f"{v:,.0f}".replace(",", "."))
         variacion = metrica.get("variacion")
-        texto_variacion = "Sin datos previos" if variacion is None else f"{variacion:+.1f}%"
+        texto_variacion = "No calculable (base 0)" if variacion is None else f"{variacion:+.1f}%"
         filas.append([metrica["nombre"], formateador(metrica["anterior"]), formateador(metrica["actual"]), texto_variacion])
 
     tabla = Table(filas, colWidths=[150, 120, 120, 90])
@@ -1120,15 +1343,6 @@ def _generar_pdf_comparativo_negocio(datos):
 
     estilos = getSampleStyleSheet()
     contenido = []
-    contenido.append(Paragraph("INFORME COMPARATIVO QUINCENAL - NEGOCIO", ParagraphStyle(
-        "TituloComparativoNegocio",
-        parent=estilos["Title"],
-        alignment=TA_CENTER,
-        fontName="Helvetica-Bold",
-        fontSize=19,
-        textColor=colors.HexColor("#2E3344"),
-        spaceAfter=8,
-    )))
     contenido.append(Paragraph(
         f"Periodo actual: {datos['periodo_actual']['etiqueta']}  |  Periodo anterior: {datos['periodo_anterior']['etiqueta']}",
         ParagraphStyle(
@@ -1149,14 +1363,21 @@ def _generar_pdf_comparativo_negocio(datos):
     if grafico is not None:
         contenido.append(Spacer(1, 12))
         contenido.append(grafico)
+    else:
+        contenido.append(Paragraph(
+            "No se grafica la variación porque los indicadores no tienen una base anterior distinta de cero.",
+            estilos["BodyText"],
+        ))
 
     if datos["productos_comparados"]:
         contenido.append(Spacer(1, 12))
         contenido.append(_seccion_pdf("Comparativo de productos (unidades vendidas)", "SeccionCompNeg2", estilos))
-        filas_productos = [["Producto", "Periodo anterior", "Periodo actual", "Variación"]]
+        filas_productos = [
+            ["Producto", "Periodo anterior (unidades)", "Periodo actual (unidades)", "Variación"]
+        ]
         for item in datos["productos_comparados"]:
             variacion = item.get("variacion")
-            texto_variacion = "Sin datos previos" if variacion is None else f"{variacion:+.1f}%"
+            texto_variacion = "No calculable (base 0)" if variacion is None else f"{variacion:+.1f}%"
             filas_productos.append([item["nombre"], str(item["anterior"]), str(item["actual"]), texto_variacion])
         tabla_productos = Table(filas_productos, colWidths=[190, 100, 100, 90])
         tabla_productos.setStyle(TableStyle([
@@ -1170,8 +1391,23 @@ def _generar_pdf_comparativo_negocio(datos):
             ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ]))
         contenido.append(tabla_productos)
+        grafico_productos = _grafico_comparativo_pdf(
+            [
+                {"nombre": item["nombre"], "variacion": item["variacion"]}
+                for item in datos["productos_comparados"]
+            ],
+            alto=250,
+        )
+        if grafico_productos is not None:
+            contenido.append(Spacer(1, 10))
+            contenido.append(grafico_productos)
+        else:
+            contenido.append(Paragraph(
+                "No se grafica la variación de productos porque no existe una base anterior distinta de cero.",
+                estilos["BodyText"],
+            ))
 
-    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=54, bottomMargin=40)
+    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=MARGEN_SUPERIOR_REPORTE_PDF, bottomMargin=40)
     titulo_encabezado = "INFORME COMPARATIVO QUINCENAL - NEGOCIO"
     fecha_encabezado = f"Actual: {datos['periodo_actual']['etiqueta']}"
     documento.build(
@@ -1189,15 +1425,6 @@ def _generar_pdf_comparativo_contabilidad(datos):
 
     estilos = getSampleStyleSheet()
     contenido = []
-    contenido.append(Paragraph("INFORME COMPARATIVO QUINCENAL - CONTABILIDAD", ParagraphStyle(
-        "TituloComparativoContab",
-        parent=estilos["Title"],
-        alignment=TA_CENTER,
-        fontName="Helvetica-Bold",
-        fontSize=19,
-        textColor=colors.HexColor("#2E3344"),
-        spaceAfter=8,
-    )))
     contenido.append(Paragraph(
         f"Periodo actual: {datos['periodo_actual']['etiqueta']}  |  Periodo anterior: {datos['periodo_anterior']['etiqueta']}",
         ParagraphStyle(
@@ -1214,16 +1441,17 @@ def _generar_pdf_comparativo_contabilidad(datos):
     contenido.append(_seccion_pdf("Ingresos, egresos y utilidad", "SeccionCompContab1", estilos))
     contenido.append(_tabla_comparativa_pdf(datos["metricas"]))
 
-    grafico = _grafico_comparativo_pdf(
-        list(datos["metricas"].values()),
-        color_anterior=colors.HexColor("#8A90A6"),
-        color_actual=colors.HexColor("#7AE582"),
-    )
+    grafico = _grafico_comparativo_pdf(list(datos["metricas"].values()))
     if grafico is not None:
         contenido.append(Spacer(1, 12))
         contenido.append(grafico)
+    else:
+        contenido.append(Paragraph(
+            "No se grafica la variación porque los indicadores no tienen una base anterior distinta de cero.",
+            estilos["BodyText"],
+        ))
 
-    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=54, bottomMargin=40)
+    documento = SimpleDocTemplate(str(archivo), pagesize=letter, leftMargin=36, rightMargin=36, topMargin=MARGEN_SUPERIOR_REPORTE_PDF, bottomMargin=40)
     titulo_encabezado = "INFORME COMPARATIVO QUINCENAL - CONTABILIDAD"
     fecha_encabezado = f"Actual: {datos['periodo_actual']['etiqueta']}"
     documento.build(
@@ -1283,6 +1511,8 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
             _tarjeta_resumen("Ventas", _formatear_pesos(negocio["total_ventas"]), "#F2C744"),
             _tarjeta_resumen("Unidades", str(negocio["total_unidades"]), "#7AE582"),
             _tarjeta_resumen("Ticket promedio", _formatear_pesos(negocio["ticket_promedio"]), "#7ABAFB"),
+            _tarjeta_resumen("Domicilios", str(negocio["cantidad_domicilios"]), "#C792EA"),
+            _tarjeta_resumen("Ingresos domicilio", _formatear_pesos(negocio["ingresos_domicilios"]), "#FFB86C"),
         ],
     )
 
@@ -1305,8 +1535,28 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
             spacing=16,
             controls=[
                 ft.Text("REPORTE GENERAL DEL NEGOCIO", size=24, weight="bold", color="white"),
-                ft.Text("Resumen operativo del negocio: ventas, productos, ticket promedio y comportamiento del negocio.", size=14, color="#C9CEDB"),
+                ft.Text(
+                    f"Periodo analizado: {negocio['periodo']}. Resumen operativo de ventas, productos y ticket promedio.",
+                    size=14,
+                    color="#C9CEDB",
+                ),
                 resumen_negocio,
+                ft.Divider(color="#3A3F52", height=1),
+                ft.Text("Ventas por tipo de pedido", size=16, weight="bold", color="white"),
+                _grafico_barras(
+                    [
+                        (tipo.replace("_", " ").title(), cantidad)
+                        for tipo, cantidad in sorted(
+                            negocio["ventas_por_tipo"].items()
+                        )
+                    ],
+                    color="#C792EA",
+                    formateador=lambda valor: f"{valor:.0f}",
+                ),
+                ft.Text(
+                    f"Domicilios entregados: {negocio['domicilios_entregados']}",
+                    color="#C9CEDB",
+                ),
                 ft.Divider(color="#3A3F52", height=1),
                 ft.Text("Ventas por medio de pago", size=16, weight="bold", color="white"),
                 _grafico_pastel(list(negocio["metodo_totales"].items())),
@@ -1336,7 +1586,11 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
             spacing=16,
             controls=[
                 ft.Text("REPORTE DE CONTABILIDAD", size=24, weight="bold", color="white"),
-                ft.Text("Resumen claro de ingresos y egresos para entender la contabilidad básica del negocio.", size=14, color="#C9CEDB"),
+                ft.Text(
+                    f"Periodo analizado: {contabilidad['periodo']}. Estado de resultados y flujo de caja.",
+                    size=14,
+                    color="#C9CEDB",
+                ),
                 resumen_contabilidad,
                 ft.Divider(color="#3A3F52", height=1),
                 ft.Text("Composición de egresos", size=16, weight="bold", color="white"),

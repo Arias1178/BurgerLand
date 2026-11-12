@@ -2,12 +2,16 @@ import flet as ft
 
 from database.database import SessionLocal
 from database.models import (
+    catalogo_proveedores,
     categorias_proveedores,
     compras,
     detalles_compras,
+    gastos,
     inventario,
+    productos,
     proveedores,
     rol,
+    ventas,
 )
 
 
@@ -111,29 +115,82 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
                 proveedores.id_proveedor == prov.id_proveedor
             ).first()
             if not registro:
-                return
+                return "El proveedor ya no existe."
+            tiene_historial = any(
+                consulta.count()
+                for consulta in (
+                    db_local.query(compras).filter(
+                        compras.id_proveedor == prov.id_proveedor
+                    ),
+                    db_local.query(gastos).filter(
+                        gastos.id_proveedor == prov.id_proveedor
+                    ),
+                    db_local.query(ventas).filter(
+                        ventas.id_proveedor == prov.id_proveedor
+                    ),
+                    db_local.query(productos).filter(
+                        productos.id_proveedor == prov.id_proveedor
+                    ),
+                    db_local.query(inventario).filter(
+                        inventario.id_proveedor == prov.id_proveedor
+                    ),
+                )
+            )
+            if tiene_historial:
+                return (
+                    "No se puede eliminar porque está asociado a productos del menú, "
+                    "inventario, compras, gastos o ventas. Inhabilítalo para conservar esas referencias."
+                )
+            categoria_nombre = registro.que_provee
+            db_local.query(catalogo_proveedores).filter(
+                catalogo_proveedores.id_proveedor == prov.id_proveedor
+            ).delete(synchronize_session=False)
             db_local.delete(registro)
+            categoria = db_local.query(categorias_proveedores).filter(
+                categorias_proveedores.nombre == categoria_nombre
+            ).first()
+            if categoria and not db_local.query(proveedores).filter(
+                proveedores.que_provee == categoria_nombre,
+                proveedores.id_proveedor != prov.id_proveedor,
+            ).count():
+                db_local.delete(categoria)
             db_local.commit()
+            return None
         finally:
             db_local.close()
-        recargar()
 
     def confirmar_eliminacion_proveedor(prov):
+        mensaje = ft.Text("", color="#FF7B7B", size=12)
+
+        def eliminar(_):
+            error = eliminar_proveedor(prov)
+            if error:
+                mensaje.value = error
+                page.update()
+                return
+            page.pop_dialog()
+            recargar()
+
         page.show_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text("Eliminar proveedor definitivamente"),
-                content=ft.Text(
-                    f"Se eliminará permanentemente a {prov.nombre}. Esta acción no se puede deshacer.",
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            f"Se eliminará permanentemente a {prov.nombre} y su catálogo. "
+                            "Esta acción no se puede deshacer.",
+                            color="white",
+                        ),
+                        mensaje,
+                    ],
                 ),
                 actions=[
                     ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
                     ft.TextButton(
                         "Eliminar definitivamente",
-                        on_click=lambda e: (
-                            page.pop_dialog(),
-                            eliminar_proveedor(prov),
-                        ),
+                        on_click=eliminar,
                     ),
                 ],
             )
@@ -269,6 +326,143 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
             )
         )
 
+    def ver_catalogo(prov):
+        def editar_precio_catalogo(articulo):
+            precio = ft.TextField(
+                label="Precio unitario de compra ($)",
+                value=(
+                    str(articulo.precio_unitario)
+                    if articulo.precio_unitario is not None
+                    else ""
+                ),
+                keyboard_type=ft.KeyboardType.NUMBER,
+            )
+            mensaje = ft.Text("", color="#FF7B7B", size=12)
+
+            def guardar(_):
+                db_local = SessionLocal()
+                try:
+                    from services.proveedores_service import actualizar_precio_catalogo
+
+                    actualizar_precio_catalogo(
+                        db_local,
+                        articulo.id_producto_proveedor,
+                        precio.value,
+                    )
+                except ValueError as error:
+                    db_local.rollback()
+                    mensaje.value = str(error)
+                    page.update()
+                    return
+                finally:
+                    db_local.close()
+                page.pop_dialog()
+                ver_catalogo(prov)
+
+            page.show_dialog(
+                ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text(f"Precio de {articulo.nombre}"),
+                    content=ft.Column(
+                        tight=True,
+                        controls=[
+                            precio,
+                            mensaje,
+                        ],
+                    ),
+                    actions=[
+                        ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
+                        ft.TextButton("Guardar", on_click=guardar),
+                    ],
+                )
+            )
+
+        db_local = SessionLocal()
+        try:
+            registros = (
+                db_local.query(catalogo_proveedores)
+                .filter(catalogo_proveedores.id_proveedor == prov.id_proveedor)
+                .order_by(catalogo_proveedores.grupo.asc(), catalogo_proveedores.nombre.asc())
+                .all()
+            )
+            grupos = {}
+            for registro in registros:
+                grupos.setdefault(registro.grupo, []).append(registro)
+            contenido = []
+            for grupo, articulos in grupos.items():
+                contenido.append(
+                    ft.Text(
+                        grupo,
+                        color="#F2C744",
+                        size=15,
+                        weight="bold",
+                    )
+                )
+                contenido.extend(
+                    ft.Column(
+                        tight=True,
+                        spacing=2,
+                        controls=[
+                            ft.Text(articulo.nombre, color="white", weight="bold"),
+                            ft.Text(
+                                articulo.detalles or "Sin detalles de presentación.",
+                                color="#C9CEDB",
+                                size=12,
+                            ),
+                            ft.Row(
+                                controls=[
+                                    ft.Text(
+                                        (
+                                            f"Precio unitario de compra: "
+                                            f"${articulo.precio_unitario:,.0f}".replace(",", ".")
+                                            if articulo.precio_unitario is not None
+                                            else "Precio unitario de compra sin registrar"
+                                        ),
+                                        color="#F2C744",
+                                        size=12,
+                                    ),
+                                    ft.TextButton(
+                                        "Definir precio" if articulo.precio_unitario is None else "Editar precio",
+                                        visible=es_admin,
+                                        on_click=lambda e, item=articulo: editar_precio_catalogo(item),
+                                    ) if es_admin else ft.Container(),
+                                ],
+                            ),
+                        ],
+                    )
+                    for articulo in articulos
+                )
+        finally:
+            db_local.close()
+
+        if not contenido:
+            contenido = [
+                ft.Text(
+                    "Este proveedor aún no tiene artículos registrados en su catálogo.",
+                    color="#C9CEDB",
+                )
+            ]
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(f"Catálogo de {prov.nombre}"),
+                content=ft.Container(
+                    width=620,
+                    height=520,
+                    content=ft.Column(
+                        tight=True,
+                        spacing=10,
+                        scroll="auto",
+                        controls=contenido,
+                    ),
+                ),
+                actions=[
+                    ft.TextButton("Cerrar", on_click=lambda e: page.pop_dialog())
+                ],
+            )
+        )
+
     def abrir_formulario(prov=None):
         nombre = ft.TextField(label="Nombre del proveedor", value=prov.nombre if prov else "")
         categorias = obtener_categorias()
@@ -283,12 +477,15 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
         )
 
         def cambiar_categoria(e):
-            categoria_nueva.visible = que_provee.value == "__nueva__"
+            categoria_nueva.visible = e.control.value == "__nueva__"
             page.update()
 
-        que_provee.on_change = cambiar_categoria
+        que_provee.on_select = cambiar_categoria
         telefono = ft.TextField(label="Número de teléfono", value=prov.telefono if prov else "")
-        correo = ft.TextField(label="Correo", value=prov.correo if prov else "")
+        correo = ft.TextField(
+            label="Correo (opcional)",
+            value=prov.correo or "" if prov else "",
+        )
         cuanto_cobra = ft.TextField(label="Cuánto cobra", value=str(prov.cuanto_cobra if prov else 0))
         mensaje = ft.Text("", color="#FF7B7B", size=12)
 
@@ -298,8 +495,8 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
                 if que_provee.value == "__nueva__"
                 else (que_provee.value or "").strip()
             )
-            if not nombre.value.strip() or not categoria_valor or not correo.value.strip():
-                mensaje_local.value = "Completa nombre, qué provee y correo."
+            if not nombre.value.strip() or not categoria_valor:
+                mensaje_local.value = "Completa el nombre del proveedor y su categoría de suministro."
                 return False
 
             try:
@@ -310,6 +507,17 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
 
             db_local = SessionLocal()
             try:
+                correo_valor = correo.value.strip() or None
+                consulta_correo = db_local.query(proveedores).filter(
+                    proveedores.correo == correo_valor
+                )
+                if prov is not None:
+                    consulta_correo = consulta_correo.filter(
+                        proveedores.id_proveedor != prov.id_proveedor
+                    )
+                if correo_valor and consulta_correo.first():
+                    mensaje_local.value = "Ese correo ya está registrado para otro proveedor."
+                    return False
                 if not db_local.query(categorias_proveedores).filter(
                     categorias_proveedores.nombre == categoria_valor
                 ).first():
@@ -320,7 +528,7 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
                             nombre=nombre.value.strip(),
                             que_provee=categoria_valor,
                             telefono=telefono.value.strip() or None,
-                            correo=correo.value.strip(),
+                            correo=correo_valor,
                             cuanto_cobra=cobro,
                             estado=ESTADO_ACTIVO,
                         )
@@ -333,7 +541,7 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
                     registro.nombre = nombre.value.strip()
                     registro.que_provee = categoria_valor
                     registro.telefono = telefono.value.strip() or None
-                    registro.correo = correo.value.strip()
+                    registro.correo = correo_valor
                     registro.cuanto_cobra = cobro
                 db_local.commit()
                 return True
@@ -366,6 +574,15 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
         )
         page.show_dialog(dialog)
 
+    def _contar_articulos_catalogo(id_proveedor):
+        db_local = SessionLocal()
+        try:
+            return db_local.query(catalogo_proveedores).filter(
+                catalogo_proveedores.id_proveedor == id_proveedor
+            ).count()
+        finally:
+            db_local.close()
+
     def construir_tabla(items):
         filas = []
         for prov in items:
@@ -378,6 +595,16 @@ def proveedores_view(page: ft.Page, navbar, usuario_actual=None):
                     on_click=lambda e, p=prov: ver_compras(p),
                 )
             ]
+            cantidad_catalogo = _contar_articulos_catalogo(prov.id_proveedor)
+            acciones.insert(
+                0,
+                ft.TextButton(
+                    f"Catálogo ({cantidad_catalogo})",
+                    tooltip="Consultar artículos que ofrece este proveedor",
+                    style=ft.ButtonStyle(color="#9CCBFF"),
+                    on_click=lambda e, p=prov: ver_catalogo(p),
+                ),
+            )
             if es_admin:
                 acciones.extend(
                     [

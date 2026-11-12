@@ -1,8 +1,13 @@
 import datetime as dt
 import unittest
 
-from create_db import init_db
-from database.database import SessionLocal
+from unittest.mock import patch
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from database.database import Base
 from database.models import (
     caja,
     categorias_gasto,
@@ -20,17 +25,49 @@ from services.contabilidad_service import calcular_nomina_mensual, generar_cierr
 
 class ContabilidadServiceTests(unittest.TestCase):
     def setUp(self):
-        init_db()
-        self.db = SessionLocal()
-        self.db.query(caja).delete()
-        self.db.query(ventas).delete()
-        self.db.query(detalle_ventas).delete()
-        self.db.query(costo_producto).delete()
-        self.db.query(gastos).delete()
+        self.engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+        self.session_local_patcher = patch(
+            "services.contabilidad_service.SessionLocal",
+            self.SessionLocal,
+        )
+        self.session_local_patcher.start()
+
+        self.db.add(parametros_legales(
+            anio=2026,
+            smlv=1750905,
+            auxilio_transporte=249095,
+            uvt=52374,
+            pct_salud_empleador=0.085,
+            pct_pension_empleador=0.12,
+            pct_arl=0.00522,
+            pct_caja_compensacion=0.04,
+            pct_cesantias=1 / 12,
+            pct_intereses_cesantias=0.12,
+            pct_prima=1 / 12,
+            pct_vacaciones=1 / 24,
+            tarifa_impoconsumo=0.08,
+            tarifa_rst=0.019,
+        ))
+        self.db.add_all([
+            estados_caja(nombre="ABIERTA"),
+            estados_caja(nombre="CERRADA"),
+            categorias_gasto(nombre="Otros", tipo="VARIABLE"),
+            productos(nombre="Producto de prueba", precio=1000, stock=0),
+        ])
         self.db.commit()
 
     def tearDown(self):
         self.db.close()
+        self.session_local_patcher.stop()
+        Base.metadata.drop_all(self.engine)
+        self.engine.dispose()
 
     def test_calcular_nomina_mensual_saldo_minimo_2026(self):
         parametros = self.db.query(parametros_legales).filter(parametros_legales.anio == 2026).first()

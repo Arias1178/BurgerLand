@@ -1,7 +1,8 @@
 import flet as ft
 
 from database.database import SessionLocal
-from database.models import categorias, estados_productos, productos, rol
+from database.models import categorias, estados_productos, inventario, productos, rol
+from services.inventario_service import buscar_inventario_para_producto
 
 
 ESTADO_ACTIVO = "ACTIVO"
@@ -156,6 +157,20 @@ def menu_view(page: ft.Page, navbar, usuario_actual=None):
         db_local = SessionLocal()
         try:
             categorias_disponibles = db_local.query(categorias).order_by(categorias.nombre.asc()).all()
+            inventario_disponible = (
+                db_local.query(inventario)
+                .filter(
+                    (inventario.estado == ESTADO_ACTIVO)
+                    | (inventario.id_inventario == (prod.id_inventario if prod else -1))
+                )
+                .all()
+            )
+            inventario_disponible.sort(
+                key=lambda item: (
+                    "bebida" not in (item.categoria or "").casefold(),
+                    item.nombre.casefold(),
+                )
+            )
         finally:
             db_local.close()
 
@@ -170,6 +185,20 @@ def menu_view(page: ft.Page, navbar, usuario_actual=None):
             label="Sección",
             value=str(prod.id_categoria) if prod else str(categorias_disponibles[0].id_categoria),
             options=[ft.dropdown.Option(str(cat.id_categoria), cat.nombre) for cat in categorias_disponibles],
+        )
+        inventario_producto = ft.Dropdown(
+            label="Bebida o insumo que se descuenta por unidad vendida",
+            value=str(prod.id_inventario) if prod and prod.id_inventario else "__ninguno__",
+            options=[
+                ft.dropdown.Option("__ninguno__", "No descontar inventario"),
+                *[
+                    ft.dropdown.Option(
+                        str(item.id_inventario),
+                        f"{item.nombre} — {item.cantidad} {item.unidad_medida}",
+                    )
+                    for item in inventario_disponible
+                ],
+            ],
         )
         estado = ft.Dropdown(
             label="Estado",
@@ -194,20 +223,31 @@ def menu_view(page: ft.Page, navbar, usuario_actual=None):
                 mensaje.value = "No existe el estado del producto."
                 return False
 
+            id_inventario = (
+                int(inventario_producto.value)
+                if inventario_producto.value != "__ninguno__"
+                else None
+            )
             db_local = SessionLocal()
             try:
+                if id_inventario is not None and not db_local.query(inventario).filter(
+                    inventario.id_inventario == id_inventario
+                ).first():
+                    mensaje.value = "El artículo de inventario seleccionado ya no existe."
+                    return False
+
                 if prod is None:
-                    db_local.add(
-                        productos(
-                            nombre=nombre.value.strip(),
-                            precio=precio_valor,
-                            stock=stock_valor,
-                            descripcion=descripcion.value.strip() or None,
-                            id_categoria=int(categoria.value),
-                            id_estado=estado_id,
-                            id_proveedor=None,
-                        )
+                    registro = productos(
+                        nombre=nombre.value.strip(),
+                        precio=precio_valor,
+                        stock=stock_valor,
+                        descripcion=descripcion.value.strip() or None,
+                        id_categoria=int(categoria.value),
+                        id_estado=estado_id,
+                        id_proveedor=None,
+                        id_inventario=id_inventario,
                     )
+                    db_local.add(registro)
                 else:
                     registro = db_local.query(productos).filter(productos.id_producto == prod.id_producto).first()
                     if not registro:
@@ -219,12 +259,30 @@ def menu_view(page: ft.Page, navbar, usuario_actual=None):
                     registro.descripcion = descripcion.value.strip() or None
                     registro.id_categoria = int(categoria.value)
                     registro.id_estado = estado_id
+                    registro.id_inventario = id_inventario
+
+                if registro.id_inventario is None:
+                    categoria_menu = db_local.query(categorias).filter(
+                        categorias.id_categoria == int(categoria.value)
+                    ).first()
+                    inventario_coincidente = buscar_inventario_para_producto(
+                        db_local,
+                        nombre.value.strip(),
+                        categoria_menu.nombre if categoria_menu else "",
+                    )
+                    if inventario_coincidente:
+                        registro.id_inventario = inventario_coincidente.id_inventario
+
                 db_local.commit()
                 return True
             finally:
                 db_local.close()
 
-        abrir_dialogo("Nuevo producto" if prod is None else "Editar producto", [nombre, precio, stock, descripcion, categoria, estado], guardar)
+        abrir_dialogo(
+            "Nuevo producto" if prod is None else "Editar producto",
+            [nombre, precio, stock, descripcion, categoria, inventario_producto, estado],
+            guardar,
+        )
 
     def alternar_producto(prod):
         db_local = SessionLocal()

@@ -2,7 +2,11 @@
 import unittest
 from uuid import uuid4
 
-from database.database import SessionLocal
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from database.database import Base
 from database.models import (
     Usuario,
     caja,
@@ -11,6 +15,7 @@ from database.models import (
     estados_caja,
     inventario,
     metodos_pago,
+    mesas,
     movimiento_caja,
     productos,
     rol,
@@ -21,15 +26,13 @@ from services.venta_service import registrar_venta
 
 class VentaServiceTests(unittest.TestCase):
     def setUp(self):
-        self.db = SessionLocal()
-        self.db.query(movimiento_caja).delete()
-        self.db.query(detalle_ventas).delete()
-        self.db.query(ventas).delete()
-        self.db.query(caja).delete()
-        self.db.query(productos).delete()
-        self.db.query(inventario).delete()
-        self.db.query(Usuario).delete()
-        self.db.commit()
+        self.engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(self.engine)
+        self.db = sessionmaker(bind=self.engine)()
 
         rol_obj = self.db.query(rol).filter(rol.nombre == "ADMIN").first()
         if not rol_obj:
@@ -102,6 +105,8 @@ class VentaServiceTests(unittest.TestCase):
 
     def tearDown(self):
         self.db.close()
+        Base.metadata.drop_all(self.engine)
+        self.engine.dispose()
 
     def test_registrar_venta_descuenta_inventario_y_agrega_movimiento(self):
         carrito = [{
@@ -165,6 +170,71 @@ class VentaServiceTests(unittest.TestCase):
                 usuario_actual=self.usuario,
                 caja_actual=self.caja,
             )
+
+    def test_registrar_venta_guarda_lineas_y_personalizaciones_por_precio(self):
+        carrito = [
+            {
+                "id_producto": self.producto.id_producto,
+                "nombre": self.producto.nombre,
+                "precio": 13000,
+                "cantidad": 1,
+                "personalizacion": "carne: Koller; combo (+$7.500)",
+            },
+            {
+                "id_producto": self.producto.id_producto,
+                "nombre": self.producto.nombre,
+                "precio": 14000,
+                "cantidad": 1,
+                "personalizacion": "carne: Pollo apanado",
+            },
+        ]
+
+        venta = registrar_venta(
+            self.db,
+            carrito,
+            self.metodo.id_metodos_pago,
+            usuario_actual=self.usuario,
+            caja_actual=self.caja,
+        )
+
+        detalles = (
+            self.db.query(detalle_ventas)
+            .filter(detalle_ventas.id_venta == venta.id_venta)
+            .order_by(detalle_ventas.precio_unitario)
+            .all()
+        )
+        self.assertEqual(venta.total, 27000)
+        self.assertEqual(len(detalles), 2)
+        self.assertEqual([detalle.precio_unitario for detalle in detalles], [13000, 14000])
+        self.assertEqual(
+            [detalle.nombre_producto for detalle in detalles],
+            [self.producto.nombre, self.producto.nombre],
+        )
+        self.assertEqual(
+            [detalle.personalizacion for detalle in detalles],
+            ["carne: Koller; combo (+$7.500)", "carne: Pollo apanado"],
+        )
+
+    def test_registrar_venta_asocia_mesa_seleccionada(self):
+        mesa = mesas(numero=1, estado="LIBRE")
+        self.db.add(mesa)
+        self.db.commit()
+
+        venta = registrar_venta(
+            self.db,
+            [{
+                "id_producto": self.producto.id_producto,
+                "nombre": self.producto.nombre,
+                "precio": self.producto.precio,
+                "cantidad": 1,
+            }],
+            self.metodo.id_metodos_pago,
+            usuario_actual=self.usuario,
+            caja_actual=self.caja,
+            mesa_id=mesa.id_mesa,
+        )
+
+        self.assertEqual(venta.id_mesa, mesa.id_mesa)
 
 
 if __name__ == "__main__":

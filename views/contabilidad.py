@@ -51,6 +51,27 @@ def _tarjeta_resumen(titulo, valor, color="#F2C744"):
     )
 
 
+def _obtener_rango_periodo(periodo, hoy):
+    if periodo == "este_mes":
+        return hoy.replace(day=1), hoy
+    if periodo == "mes_anterior":
+        fin = hoy.replace(day=1) - dt.timedelta(days=1)
+        return fin.replace(day=1), fin
+    if periodo == "ultimos_30_dias":
+        return hoy - dt.timedelta(days=29), hoy
+    if periodo == "este_anio":
+        return dt.date(hoy.year, 1, 1), hoy
+    raise ValueError("Selecciona un periodo válido.")
+
+
+def _fecha_picker_a_date(valor):
+    if isinstance(valor, dt.datetime):
+        return valor.date()
+    if isinstance(valor, dt.date):
+        return valor
+    raise ValueError("Selecciona una fecha válida.")
+
+
 def _panel_financiero(page: ft.Page, usuario_actual=None):
     """Panel de P&L, flujo de caja y registro rápido dentro de Contabilidad."""
     hoy = dt.date.today()
@@ -62,10 +83,59 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
     finally:
         db_usuario.close()
     es_administrador = rol_usuario is not None and rol_usuario.nombre == "ADMIN"
-    inicio_field = ft.TextField(
-        label="Desde (AAAA-MM-DD)", value=hoy.replace(day=1).isoformat(), width=190
+    estado_periodo = {
+        "inicio": hoy.replace(day=1),
+        "fin": hoy,
+        "fecha_transaccion": hoy,
+    }
+    periodo_field = ft.Dropdown(
+        label="Periodo del cálculo",
+        width=230,
+        value="este_mes",
+        options=[
+            ft.dropdown.Option("este_mes", "Este mes"),
+            ft.dropdown.Option("mes_anterior", "Mes anterior"),
+            ft.dropdown.Option("ultimos_30_dias", "Últimos 30 días"),
+            ft.dropdown.Option("este_anio", "Este año"),
+            ft.dropdown.Option("personalizado", "Rango personalizado"),
+        ],
     )
-    fin_field = ft.TextField(label="Hasta (AAAA-MM-DD)", value=hoy.isoformat(), width=190)
+    rango_texto = ft.Text(color="#A7AEC2", size=12)
+    inicio_fecha_button = ft.OutlinedButton(
+        content=estado_periodo["inicio"].strftime("%d/%m/%Y"),
+        icon=ft.Icons.CALENDAR_TODAY_OUTLINED,
+        visible=False,
+    )
+    fin_fecha_button = ft.OutlinedButton(
+        content=estado_periodo["fin"].strftime("%d/%m/%Y"),
+        icon=ft.Icons.CALENDAR_TODAY_OUTLINED,
+        visible=False,
+    )
+    inicio_picker = ft.DatePicker(
+        value=estado_periodo["inicio"],
+        current_date=hoy,
+        help_text="Selecciona la fecha inicial",
+        confirm_text="Seleccionar",
+        cancel_text="Cancelar",
+    )
+    fin_picker = ft.DatePicker(
+        value=estado_periodo["fin"],
+        current_date=hoy,
+        help_text="Selecciona la fecha final",
+        confirm_text="Seleccionar",
+        cancel_text="Cancelar",
+    )
+    transaccion_fecha_button = ft.OutlinedButton(
+        content=hoy.strftime("%d/%m/%Y"),
+        icon=ft.Icons.CALENDAR_TODAY_OUTLINED,
+    )
+    transaccion_fecha_picker = ft.DatePicker(
+        value=hoy,
+        current_date=hoy,
+        help_text="Fecha de la transacción",
+        confirm_text="Seleccionar",
+        cancel_text="Cancelar",
+    )
     tipo_field = ft.Dropdown(
         label="Tipo de transacción",
         width=310,
@@ -83,14 +153,62 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
     mensaje = ft.Text("", size=13)
     resultados = ft.Column(spacing=8)
 
+    def actualizar_texto_rango():
+        inicio = estado_periodo["inicio"]
+        fin = estado_periodo["fin"]
+        inicio_fecha_button.content = inicio.strftime("%d/%m/%Y")
+        fin_fecha_button.content = fin.strftime("%d/%m/%Y")
+        rango_texto.value = (
+            f"Periodo: {inicio.strftime('%d/%m/%Y')} – {fin.strftime('%d/%m/%Y')}"
+        )
+
+    def cambiar_periodo(_evento):
+        periodo = periodo_field.value
+        es_personalizado = periodo == "personalizado"
+        inicio_fecha_button.visible = es_personalizado
+        fin_fecha_button.visible = es_personalizado
+        if not es_personalizado:
+            estado_periodo["inicio"], estado_periodo["fin"] = (
+                _obtener_rango_periodo(periodo, dt.date.today())
+            )
+        inicio_picker.value = estado_periodo["inicio"]
+        fin_picker.value = estado_periodo["fin"]
+        actualizar_texto_rango()
+        page.update()
+
+    def cambiar_fecha_periodo(_evento, extremo):
+        picker = inicio_picker if extremo == "inicio" else fin_picker
+        fecha = _fecha_picker_a_date(picker.value)
+        estado_periodo[extremo] = fecha
+        actualizar_texto_rango()
+        page.update()
+
+    def cambiar_fecha_transaccion(_evento):
+        fecha = _fecha_picker_a_date(transaccion_fecha_picker.value)
+        estado_periodo["fecha_transaccion"] = fecha
+        transaccion_fecha_button.content = fecha.strftime("%d/%m/%Y")
+        page.update()
+
+    inicio_picker.on_change = lambda evento: cambiar_fecha_periodo(
+        evento, "inicio"
+    )
+    fin_picker.on_change = lambda evento: cambiar_fecha_periodo(evento, "fin")
+    transaccion_fecha_picker.on_change = cambiar_fecha_transaccion
+    inicio_fecha_button.on_click = lambda _evento: page.show_dialog(inicio_picker)
+    fin_fecha_button.on_click = lambda _evento: page.show_dialog(fin_picker)
+    transaccion_fecha_button.on_click = lambda _evento: page.show_dialog(
+        transaccion_fecha_picker
+    )
+    periodo_field.on_change = cambiar_periodo
+    actualizar_texto_rango()
+
     def cargar_datos():
-        try:
-            inicio = dt.date.fromisoformat(inicio_field.value)
-            fin = dt.date.fromisoformat(fin_field.value)
-            if inicio > fin:
-                raise ValueError("La fecha inicial no puede ser posterior a la fecha final.")
-        except (TypeError, ValueError) as error:
-            mensaje.value = f"Fechas inválidas: {error}"
+        inicio = estado_periodo["inicio"]
+        fin = estado_periodo["fin"]
+        if inicio > fin:
+            mensaje.value = (
+                "La fecha inicial no puede ser posterior a la fecha final."
+            )
             mensaje.color = "#FF7B7B"
             page.update()
             return
@@ -107,7 +225,7 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
             pnl = engine.calculate_pnl(inicio, fin)
             cash = engine.calculate_cash_flow(inicio, fin)
             try:
-                break_even = engine.calculate_break_even()
+                break_even = engine.calculate_break_even(inicio, fin)
                 break_even_text = _formatear_pesos(break_even)
             except ValueError:
                 break_even_text = "Sin datos suficientes"
@@ -127,17 +245,70 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
                     _tarjeta_resumen("Utilidad neta", _formatear_pesos(pnl.utilidad_neta), "#F2C744"),
                     _tarjeta_resumen("Flujo neto", _formatear_pesos(cash.flujo_neto), "#7AE582"),
                     _tarjeta_resumen("Abonos a capital", _formatear_pesos(cash.abonos_capital), "#FFB86C"),
+                    _tarjeta_resumen("Por pagar", _formatear_pesos(cash.cuentas_pendientes), "#FFB86C"),
+                    _tarjeta_resumen("Por cobrar", _formatear_pesos(cash.ingresos_pendientes), "#7ABAFB"),
                     _tarjeta_resumen("Punto de equilibrio", break_even_text, "#F2C744"),
                 ],
             ),
             ft.Text(
                 f"Salidas de caja: {_formatear_pesos(cash.salidas)} | "
-                f"Cuentas pendientes: {_formatear_pesos(cash.cuentas_pendientes)}",
+                f"Periodo: {inicio.strftime('%d/%m/%Y')} – {fin.strftime('%d/%m/%Y')}",
                 color="#C9CEDB",
             ),
             ft.Text(
+                "Pendientes del periodo",
+                size=16,
+                weight="bold",
+                color="white",
+            ),
+            ft.Column(
+                spacing=6,
+                controls=[
+                    ft.Container(
+                        padding=10,
+                        bgcolor="#1B202B",
+                        border_radius=10,
+                        content=ft.Row(
+                            wrap=True,
+                            alignment="spaceBetween",
+                            controls=[
+                                ft.Text(
+                                    f"{item.tipo} · {item.concepto}"
+                                    + (
+                                        f" · {item.fecha.strftime('%d/%m/%Y')}"
+                                        if item.fecha
+                                        else ""
+                                    ),
+                                    color="#C9CEDB",
+                                    size=12,
+                                ),
+                                ft.Text(
+                                    _formatear_pesos(item.monto),
+                                    color=(
+                                        "#7ABAFB"
+                                        if item.tipo == "Por cobrar"
+                                        else "#FFB86C"
+                                    ),
+                                    size=12,
+                                    weight="bold",
+                                ),
+                            ],
+                        ),
+                    )
+                    for item in cash.detalle_pendientes
+                ]
+                or [
+                    ft.Text(
+                        "No hay transacciones, servicios ni cuotas pendientes.",
+                        color="#9AA0B4",
+                        size=12,
+                    )
+                ],
+            ),
+            ft.Text(
                 "La utilidad neta descuenta intereses, pero no abonos a capital. "
-                "El flujo de caja sí incluye todos los pagos y el capital.",
+                "El flujo de caja solo incluye pagos realizados; las obligaciones "
+                "pendientes se muestran por separado.",
                 color="#9AA0B4",
                 size=12,
             ),
@@ -149,15 +320,16 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
     def registrar_transaccion(_e):
         try:
             monto = float(monto_field.value or 0)
-            if monto < 0:
-                raise ValueError("El monto no puede ser negativo.")
+            if monto <= 0:
+                raise ValueError("El monto debe ser mayor que cero.")
             tipo = (tipo_field.value or "").strip()
             tipos_validos = {"ingreso", "gasto_fijo", "gasto_variable", "gasto_financiero"}
             if tipo not in tipos_validos:
                 raise ValueError("El tipo no coincide con uno de los tipos permitidos.")
-            fecha = dt.datetime.combine(dt.date.fromisoformat(fin_field.value), dt.time.min)
-            if not categoria_field.value:
+            categoria = (categoria_field.value or "").strip()
+            if not categoria:
                 raise ValueError("La categoría es obligatoria.")
+            fecha = estado_periodo["fecha_transaccion"]
         except (TypeError, ValueError) as error:
             mensaje.value = f"No se pudo registrar: {error}"
             mensaje.color = "#FF7B7B"
@@ -170,8 +342,8 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
                 Transaction(
                     tipo=tipo,
                     monto=monto,
-                    fecha=fecha,
-                    categoria=categoria_field.value.strip(),
+                    fecha=dt.datetime.combine(fecha, dt.time.min),
+                    categoria=categoria,
                     pagado=bool(pagado_field.value),
                 )
             )
@@ -180,7 +352,16 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
             db.close()
         monto_field.value = ""
         categoria_field.value = ""
-        mensaje.value = "Transacción registrada correctamente."
+        periodo_field.value = "personalizado"
+        periodo_field.update()
+        estado_periodo["inicio"] = fecha
+        estado_periodo["fin"] = fecha
+        inicio_fecha_button.visible = True
+        fin_fecha_button.visible = True
+        actualizar_texto_rango()
+        mensaje.value = (
+            "Transacción registrada; el cálculo muestra el día de la transacción."
+        )
         mensaje.color = "#7AE582"
         cargar_datos()
 
@@ -766,8 +947,11 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
                     spacing=12,
                     run_spacing=12,
                     controls=[
-                        inicio_field,
-                        fin_field,
+                        periodo_field,
+                        inicio_fecha_button,
+                        ft.Text("hasta", color="#A7AEC2"),
+                        fin_fecha_button,
+                        rango_texto,
                         _boton_accion("Calcular", on_click=cargar_datos, icono=ft.Icons.CALCULATE_OUTLINED),
                     ],
                 ),
@@ -788,6 +972,7 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
                                     tipo_field,
                                     monto_field,
                                     categoria_field,
+                                    transaccion_fecha_button,
                                     pagado_field,
                                     _boton_accion("Registrar", on_click=registrar_transaccion, icono=ft.Icons.ADD_CIRCLE_OUTLINE),
                                 ],

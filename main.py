@@ -2,6 +2,7 @@ import ssl
 import certifi
 import os
 import datetime
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from sqlalchemy import func
 
@@ -12,7 +13,18 @@ os.environ["SSL_CERT_FILE"] = certifi.where()
 import flet as ft
 from create_db import init_db
 from database.database import SessionLocal
-from database.models import caja, estados_caja, ventas, detalle_ventas, metodos_pago, informes, rol
+from database.models import (
+    Usuario,
+    caja,
+    cuentas_abiertas,
+    estados_caja,
+    ventas,
+    detalle_ventas,
+    metodos_pago,
+    informes,
+    movimiento_caja,
+    rol,
+)
 from views.login import login_view
 from views.inicio import inicio_view
 from views.venta import venta_view
@@ -24,10 +36,76 @@ from views.proveedores import proveedores_view
 from views.compras import compras_view
 from views.informes import informes_view
 from views.nueva_venta_view import nueva_venta_view
+from views.cuentas_abiertas import cuentas_abiertas_view
 from views.contabilidad import contabilidad_view
+from views.usuarios import usuarios_view
 from services.contabilidad_service import can_process_accounting, obtener_ultima_caja_cerrada, generar_cierre_contable
+from services.retiros_caja_service import registrar_retiro
 
 usuario_actual = {"valor": None}  # guardamos el usuario logueado aquí
+SALDO_INICIAL_SUGERIDO = 2_000_000
+UMBRAL_APERTURA_MULTIPLICADOR = float(
+    os.environ.get("CAJA_APERTURA_MULTIPLICADOR", "5")
+)
+
+
+def parsear_valor_cop(valor):
+    if isinstance(valor, (int, float, Decimal)) and not isinstance(valor, bool):
+        try:
+            saldo = Decimal(str(valor))
+        except InvalidOperation as error:
+            raise ValueError("El saldo inicial debe ser numérico.") from error
+        if not saldo.is_finite():
+            raise ValueError("El saldo inicial debe ser numérico.")
+        return float(saldo)
+
+    texto = str(valor or "").strip().replace("$", "").replace(" ", "")
+    if not texto:
+        raise ValueError("El saldo inicial debe ser numérico.")
+
+    if "," in texto:
+        entero, decimal = texto.rsplit(",", 1)
+        if decimal.isdigit() and len(decimal) <= 2:
+            texto = f"{entero.replace('.', '').replace(',', '')}.{decimal}"
+        else:
+            texto = texto.replace(".", "").replace(",", "")
+    else:
+        texto = texto.replace(".", "")
+
+    try:
+        saldo = Decimal(texto)
+    except InvalidOperation as error:
+        raise ValueError("El saldo inicial debe ser numérico.") from error
+    if not saldo.is_finite():
+        raise ValueError("El saldo inicial debe ser numérico.")
+    return float(saldo)
+
+
+def advertencia_apertura(db, saldo_inicial):
+    if saldo_inicial <= 0:
+        return "El valor de apertura debe ser mayor que cero."
+
+    promedio = (
+        db.query(func.avg(caja.saldo_inicial))
+        .filter(caja.saldo_inicial > 0)
+        .scalar()
+    )
+    if (
+        promedio
+        and UMBRAL_APERTURA_MULTIPLICADOR > 0
+        and saldo_inicial > float(promedio) * UMBRAL_APERTURA_MULTIPLICADOR
+    ):
+        return (
+            "El valor supera "
+            f"{UMBRAL_APERTURA_MULTIPLICADOR:g} veces el promedio histórico "
+            f"de aperturas (${float(promedio):,.0f}".replace(",", ".")
+            + ")."
+        )
+    return None
+
+
+def calcular_saldo_final_caja(saldo_inicial, efectivo, egresos):
+    return float(saldo_inicial or 0) + float(efectivo or 0) - float(egresos or 0)
 
 
 def obtener_estado_caja(db, nombre):
@@ -45,9 +123,14 @@ def obtener_caja_abierta(db, usuario_id=None):
     return query.order_by(caja.fecha_apertura.desc()).first()
 
 
-def abrir_caja(usuario, saldo_inicial):
+def abrir_caja(usuario, saldo_inicial, confirmar_inusual=False):
     if not usuario:
         return {"ok": False, "mensaje": "Debes iniciar sesión para abrir caja."}
+
+    try:
+        saldo_inicial = parsear_valor_cop(saldo_inicial)
+    except ValueError:
+        return {"ok": False, "mensaje": "El saldo inicial debe ser numérico."}
 
     db = SessionLocal()
     if obtener_caja_abierta(db, usuario.id_usuario):
@@ -59,15 +142,15 @@ def abrir_caja(usuario, saldo_inicial):
         db.close()
         return {"ok": False, "mensaje": "No existe el estado ABIERTA para caja."}
 
-    try:
-        saldo_inicial = float(saldo_inicial)
-    except (TypeError, ValueError):
+    advertencia = advertencia_apertura(db, saldo_inicial)
+    if advertencia and not confirmar_inusual:
+        valor_texto = f"${saldo_inicial:,.0f}".replace(",", ".")
         db.close()
-        return {"ok": False, "mensaje": "El saldo inicial debe ser numérico."}
-
-    if saldo_inicial < 0:
-        db.close()
-        return {"ok": False, "mensaje": "El saldo inicial no puede ser negativo."}
+        return {
+            "ok": False,
+            "requiere_confirmacion": True,
+            "mensaje": f"El valor ingresado ({valor_texto}) es inusual. {advertencia} ¿Deseas continuar?",
+        }
 
     caja_nueva = caja(
         fecha_apertura=datetime.datetime.now(),
@@ -92,6 +175,19 @@ def cerrar_caja(usuario):
         db.close()
         return {"ok": False, "mensaje": "No hay una caja abierta para cerrar."}
 
+    cuentas_pendientes = db.query(cuentas_abiertas).filter(
+        cuentas_abiertas.estado == "ABIERTA"
+    ).count()
+    if cuentas_pendientes:
+        db.close()
+        return {
+            "ok": False,
+            "mensaje": (
+                f"No se puede cerrar la caja: hay {cuentas_pendientes} "
+                "cuenta(s) abierta(s). Cóbralas o anúlalas antes del cierre."
+            ),
+        }
+
     estado_cerrada = obtener_estado_caja(db, "CERRADA")
     if not estado_cerrada:
         db.close()
@@ -113,12 +209,20 @@ def cerrar_caja(usuario):
     total_efectivo = total_por_metodo(metodo_efectivo)
     total_tarjeta = total_por_metodo(metodo_tarjeta)
     total_nequi = total_por_metodo(metodo_nequi)
+    total_egresos = db.query(func.coalesce(func.sum(movimiento_caja.valor), 0)).filter(
+        movimiento_caja.id_caja == caja_actual.id_caja,
+        movimiento_caja.tipo.in_(("EGRESO", "GASTO", "CAJA_CHICA")),
+    ).scalar() or 0
     total_proveedores = db.query(func.coalesce(func.sum(ventas.costo_proveedor), 0)).filter(ventas.id_caja == caja_actual.id_caja).scalar() or 0
     productos_vendidos = db.query(func.coalesce(func.sum(detalle_ventas.cantidad), 0)).join(
         ventas, detalle_ventas.id_venta == ventas.id_venta
     ).filter(ventas.id_caja == caja_actual.id_caja).scalar() or 0
     caja_actual.fecha_cierre = datetime.datetime.now()
-    caja_actual.saldo_final = caja_actual.saldo_inicial + total_efectivo
+    caja_actual.saldo_final = calcular_saldo_final_caja(
+        caja_actual.saldo_inicial,
+        total_efectivo,
+        total_egresos,
+    )
     caja_actual.id_estado_caja = estado_cerrada.id_estado_caja
 
     informe = informes(
@@ -184,7 +288,11 @@ async def main(page: ft.Page):
             return False
         db = SessionLocal()
         try:
-            perfil = db.query(rol).filter(rol.id_rol == usuario.id_rol).first()
+            usuario_db = db.get(Usuario, usuario.id_usuario)
+            if usuario_db is None:
+                return False
+            usuario.id_rol = usuario_db.id_rol
+            perfil = db.get(rol, usuario_db.id_rol)
             return bool(perfil and perfil.nombre == "ADMIN")
         finally:
             db.close()
@@ -211,6 +319,12 @@ async def main(page: ft.Page):
             compras_habilitadas=usuario_es_admin(),
             mostrar_contabilidad=lambda: mostrar_contabilidad(),
             contabilidad_habilitada=contabilidad_habilitada,
+            mostrar_cuentas_abiertas=lambda: mostrar_cuentas_abiertas(),
+            mostrar_usuarios=(
+                (lambda: mostrar_gestion_usuarios())
+                if usuario_es_admin()
+                else None
+            ),
         )
 
     def obtener_caja_para_contabilidad(usuario_id):
@@ -232,13 +346,43 @@ async def main(page: ft.Page):
         db.close()
         return caja_actual
 
+    def registrar_retiro_actual(monto, motivo):
+        usuario = usuario_actual["valor"]
+        if usuario is None:
+            return {"ok": False, "mensaje": "Debes iniciar sesión para retirar dinero."}
+        db = SessionLocal()
+        try:
+            caja_abierta = obtener_caja_abierta(db, usuario.id_usuario)
+            if caja_abierta is None:
+                return {"ok": False, "mensaje": "Debes tener una caja abierta."}
+            registro = registrar_retiro(
+                db,
+                caja_abierta.id_caja,
+                usuario.id_usuario,
+                monto,
+                motivo,
+            )
+            return {
+                "ok": True,
+                "mensaje": f"Retiro #{registro.id_retiro} registrado como pendiente de justificar.",
+            }
+        except ValueError as error:
+            return {"ok": False, "mensaje": str(error)}
+        finally:
+            db.close()
+
     def mostrar_venta():
         page.horizontal_alignment = "start"
         page.vertical_alignment = "start"
         page.padding = 20
         navegar(venta_view(page, get_navbar("venta"), on_nueva_venta=mostrar_nueva_venta))
 
-    def mostrar_nueva_venta():
+    def mostrar_nueva_venta(
+        mesa_id=None,
+        mesa_elegida=False,
+        cuenta_id=None,
+        tipo_pedido="MOSTRADOR",
+    ):
         page.horizontal_alignment = "start"
         page.vertical_alignment = "start"
         page.padding = 20
@@ -248,7 +392,43 @@ async def main(page: ft.Page):
             usuario_actual=usuario_actual["valor"],
             on_venta_completada=mostrar_venta,
             caja_actual=cargar_caja_actual(),
+            mesa_id=mesa_id,
+            mesa_elegida=mesa_elegida,
+            cuenta_id=cuenta_id,
+            on_seleccionar_mesa=seleccionar_mesa_venta,
+            on_cuenta_guardada=mostrar_cuentas_abiertas,
+            on_recargar_cuenta=lambda id_cuenta: mostrar_nueva_venta(
+                mesa_elegida=True,
+                cuenta_id=id_cuenta,
+            ),
+            tipo_pedido=tipo_pedido,
+            on_volver_a_mesas=(
+                mostrar_cuentas_abiertas
+                if cuenta_id is not None
+                else lambda: mostrar_nueva_venta()
+            ),
         ))
+
+    def seleccionar_mesa_venta(mesa_id, cuenta_id=None, tipo_pedido="MOSTRADOR"):
+        if cuenta_id is not None:
+            mostrar_nueva_venta(mesa_elegida=True, cuenta_id=cuenta_id)
+            return
+        mostrar_nueva_venta(mesa_id, True, tipo_pedido=tipo_pedido)
+
+    def mostrar_cuentas_abiertas():
+        page.horizontal_alignment = "start"
+        page.vertical_alignment = "start"
+        page.padding = 20
+        navegar(
+            cuentas_abiertas_view(
+                page,
+                get_navbar("cuentas_abiertas"),
+                on_abrir_cuenta=lambda id_cuenta: mostrar_nueva_venta(
+                    mesa_elegida=True,
+                    cuenta_id=id_cuenta,
+                ),
+            )
+        )
 
     def mostrar_inicio(usuario=None):
         if usuario:
@@ -261,9 +441,15 @@ async def main(page: ft.Page):
             get_navbar("inicio"),
             usuario_actual=usuario_actual["valor"],
             caja_actual=cargar_caja_actual(),
-            on_abrir_caja=lambda saldo: abrir_caja(usuario_actual["valor"], saldo),
+            on_abrir_caja=lambda saldo, confirmar_inusual=False: abrir_caja(
+                usuario_actual["valor"],
+                saldo,
+                confirmar_inusual=confirmar_inusual,
+            ),
             on_cerrar_caja=lambda: cerrar_caja(usuario_actual["valor"]),
             on_refrescar=mostrar_inicio,
+            saldo_inicial_sugerido=SALDO_INICIAL_SUGERIDO,
+            on_registrar_retiro=registrar_retiro_actual,
         ))
 
     def mostrar_menu(usuario=None):
@@ -314,6 +500,10 @@ async def main(page: ft.Page):
             total_efectivo = total_por_metodo(metodo_efectivo)
             total_tarjeta = total_por_metodo(metodo_tarjeta)
             total_nequi = total_por_metodo(metodo_nequi)
+            total_egresos = db.query(func.coalesce(func.sum(movimiento_caja.valor), 0)).filter(
+                movimiento_caja.id_caja == caja_actual.id_caja,
+                movimiento_caja.tipo.in_(("EGRESO", "GASTO", "CAJA_CHICA")),
+            ).scalar() or 0
             total_proveedores = db.query(func.coalesce(func.sum(ventas.costo_proveedor), 0)).filter(ventas.id_caja == caja_actual.id_caja).scalar() or 0
             productos_vendidos = db.query(func.coalesce(func.sum(detalle_ventas.cantidad), 0)).join(
                 ventas, detalle_ventas.id_venta == ventas.id_venta
@@ -329,7 +519,11 @@ async def main(page: ft.Page):
                 total_nequi=float(total_nequi),
                 total_proveedores=float(total_proveedores),
                 saldo_inicial=float(caja_actual.saldo_inicial),
-                saldo_final=float(caja_actual.saldo_inicial + total_efectivo),
+                saldo_final=calcular_saldo_final_caja(
+                    caja_actual.saldo_inicial,
+                    total_efectivo,
+                    total_egresos,
+                ),
                 id_caja=caja_actual.id_caja,
                 id_usuario=caja_actual.id_usuario,
             )
@@ -340,7 +534,13 @@ async def main(page: ft.Page):
         page.horizontal_alignment = "start"
         page.vertical_alignment = "start"
         page.padding = 20
-        navegar(historial_view(page, get_navbar("historial")))
+        navegar(
+            historial_view(
+                page,
+                get_navbar("historial"),
+                usuario_actual=usuario or usuario_actual["valor"],
+            )
+        )
 
     def mostrar_contabilidad(usuario=None):
         """
@@ -365,6 +565,20 @@ async def main(page: ft.Page):
             usuario_actual=usuario_actual["valor"],
             caja_actual=caja_referencia,
         ))
+
+    def mostrar_gestion_usuarios(usuario=None):
+        if not usuario_es_admin():
+            return mostrar_inicio()
+        page.horizontal_alignment = "start"
+        page.vertical_alignment = "start"
+        page.padding = 20
+        navegar(
+            usuarios_view(
+                page,
+                get_navbar("usuarios"),
+                usuario_actual=usuario_actual["valor"],
+            )
+        )
 
     def mostrar_login():
         page.horizontal_alignment = "center"
