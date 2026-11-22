@@ -1,11 +1,31 @@
 import flet as ft
 
 from database.database import SessionLocal
-from database.models import inventario, rol
+from database.models import (
+    categorias_inventario,
+    detalles_compras,
+    inventario,
+    proveedores,
+    rol,
+)
+from services.inventario_service import (
+    cambiar_estado_categoria_inventario,
+    cambiar_estado_insumo_inventario,
+    contar_insumos_categoria,
+    eliminar_categoria_inventario,
+    eliminar_insumo_inventario,
+    obtener_o_crear_categoria_inventario,
+    sincronizar_categorias_inventario,
+    vincular_producto_menu,
+)
 
 
 def formato_entero(valor):
     return str(int(valor or 0))
+
+
+def formato_pesos(valor):
+    return f"${float(valor or 0):,.0f}".replace(",", ".")
 
 
 def inventario_view(page: ft.Page, navbar, usuario_actual=None):
@@ -17,29 +37,282 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
     db.close()
 
     filtro = {"texto": ""}
+    mostrar_eliminados = {"valor": False}
     tabla_container = ft.Container(expand=True)
 
-    def obtener_items():
+    def obtener_items(incluir_eliminados=False):
         db = SessionLocal()
         try:
-            items = db.query(inventario).order_by(inventario.nombre.asc()).all()
+            consulta = db.query(inventario)
+            if not incluir_eliminados:
+                consulta = consulta.filter(inventario.estado != "ELIMINADO")
+            items = consulta.order_by(inventario.nombre.asc()).all()
             return items
         finally:
             db.close()
 
-    def obtener_categorias():
+    def obtener_categorias(categoria_actual=None):
         db = SessionLocal()
         try:
+            sincronizar_categorias_inventario(db)
+            db.commit()
             return [
-                categoria
-                for categoria, in db.query(inventario.categoria)
-                .filter(inventario.categoria.isnot(None), inventario.categoria != "")
-                .distinct()
-                .order_by(inventario.categoria.asc())
+                categoria.nombre
+                for categoria in db.query(categorias_inventario)
+                .filter(
+                    (categorias_inventario.estado == "ACTIVO")
+                    | (categorias_inventario.nombre == categoria_actual)
+                )
+                .order_by(categorias_inventario.nombre.asc())
                 .all()
             ]
         finally:
             db.close()
+
+    def abrir_gestion_categorias():
+        db = SessionLocal()
+        try:
+            sincronizar_categorias_inventario(db)
+            db.commit()
+            categorias = db.query(categorias_inventario).order_by(
+                categorias_inventario.nombre.asc()
+            ).all()
+            datos = [
+                (categoria.id_categoria_inventario, categoria.nombre,
+                 categoria.estado,
+                 contar_insumos_categoria(db, categoria.nombre))
+                for categoria in categorias
+            ]
+        finally:
+            db.close()
+
+        if not datos:
+            controles = [ft.Text("No hay categorías registradas.", color="white")]
+        else:
+            controles = [
+                ft.Row(
+                    alignment="spaceBetween",
+                    controls=[
+                        ft.Text(
+                            f"{nombre} — {estado} ({cantidad} insumos)",
+                            color="white",
+                            expand=True,
+                        ),
+                        ft.TextButton(
+                            "Restaurar" if estado == "ELIMINADO" else
+                            "Habilitar" if estado == "INACTIVO" else "Inhabilitar",
+                            on_click=lambda e, cid=id_categoria, n=nombre, actual=estado:
+                                confirmar_estado_categoria(
+                                    cid, n, actual,
+                                    "ACTIVO" if actual in {"INACTIVO", "ELIMINADO"} else "INACTIVO",
+                                ),
+                        ),
+                        ft.TextButton(
+                            "Eliminar",
+                            on_click=lambda e, cid=id_categoria, n=nombre, actual=estado:
+                                confirmar_estado_categoria(cid, n, actual, "ELIMINADO"),
+                        ) if estado != "ELIMINADO" else ft.Container(),
+                        ft.TextButton(
+                            "Eliminar definitivamente",
+                            disabled=cantidad > 0,
+                            on_click=lambda e, cid=id_categoria, n=nombre:
+                                confirmar_eliminar_categoria(cid, n),
+                        ) if estado != "ACTIVO" else ft.Container(),
+                    ],
+                )
+                for id_categoria, nombre, estado, cantidad in datos
+            ]
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Categorías del inventario"),
+                content=ft.Container(
+                    width=640,
+                    content=ft.Column(tight=True, scroll="auto", controls=controles),
+                ),
+                actions=[
+                    ft.TextButton("Cerrar", on_click=lambda e: page.pop_dialog()),
+                ],
+            )
+        )
+
+    def confirmar_estado_categoria(id_categoria, nombre, estado_actual, nuevo_estado):
+        page.pop_dialog()
+        acciones = {
+            "ACTIVO": "restaurar" if estado_actual == "ELIMINADO" else "habilitar",
+            "INACTIVO": "inhabilitar",
+            "ELIMINADO": "eliminar",
+        }
+        accion = acciones[nuevo_estado]
+        mensaje = ft.Text("", color="#FF7B7B", size=12)
+
+        def cambiar(e):
+            db = SessionLocal()
+            try:
+                cambiar_estado_categoria_inventario(db, id_categoria, nuevo_estado)
+            except ValueError as error:
+                mensaje.value = str(error)
+                page.update()
+                return
+            finally:
+                db.close()
+            page.pop_dialog()
+            refrescar()
+            abrir_gestion_categorias()
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(f"{accion.capitalize()} categoría"),
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            (
+                                f"¿Eliminar la categoría «{nombre}»? Quedará oculta, "
+                                "pero podrás restaurarla; no se borrará definitivamente."
+                                if nuevo_estado == "ELIMINADO"
+                                else f"¿Deseas {accion} la categoría «{nombre}»?"
+                            ),
+                            color="white",
+                        ),
+                        mensaje,
+                    ],
+                ),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
+                    ft.TextButton(accion.capitalize(), on_click=cambiar),
+                ],
+            )
+        )
+
+    def confirmar_eliminar_categoria(id_categoria, nombre):
+        page.pop_dialog()
+        mensaje = ft.Text("", color="#FF7B7B", size=12)
+
+        def eliminar(e):
+            db = SessionLocal()
+            try:
+                eliminar_categoria_inventario(db, id_categoria)
+            except ValueError as error:
+                mensaje.value = str(error)
+                page.update()
+                return
+            finally:
+                db.close()
+            page.pop_dialog()
+            refrescar()
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Eliminar categoría definitivamente"),
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            f"¿Eliminar la categoría «{nombre}»? "
+                            "Esta acción no se puede deshacer.",
+                            color="white",
+                        ),
+                        mensaje,
+                    ],
+                ),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
+                    ft.TextButton("Eliminar definitivamente", on_click=eliminar),
+                ],
+            )
+        )
+
+    def confirmar_estado_insumo(item, nuevo_estado):
+        acciones = {
+            "ACTIVO": "restaurar" if item.estado == "ELIMINADO" else "habilitar",
+            "INACTIVO": "inhabilitar",
+            "ELIMINADO": "eliminar",
+        }
+        accion = acciones[nuevo_estado]
+        mensaje = ft.Text("", color="#FF7B7B", size=12)
+
+        def cambiar(e):
+            db = SessionLocal()
+            try:
+                cambiar_estado_insumo_inventario(
+                    db, item.id_inventario, nuevo_estado
+                )
+            except ValueError as error:
+                mensaje.value = str(error)
+                page.update()
+                return
+            finally:
+                db.close()
+            page.pop_dialog()
+            refrescar()
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(f"{accion.capitalize()} insumo"),
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            (
+                                f"¿Eliminar «{item.nombre}»? Quedará oculto, "
+                                "pero podrás restaurarlo; no se borrará definitivamente."
+                                if nuevo_estado == "ELIMINADO"
+                                else f"¿Deseas {accion} «{item.nombre}»?"
+                            ),
+                            color="white",
+                        ),
+                        mensaje,
+                    ],
+                ),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
+                    ft.TextButton(accion.capitalize(), on_click=cambiar),
+                ],
+            )
+        )
+
+    def confirmar_eliminar_insumo(item):
+        mensaje = ft.Text("", color="#FF7B7B", size=12)
+
+        def eliminar(e):
+            db = SessionLocal()
+            try:
+                eliminar_insumo_inventario(db, item.id_inventario)
+            except ValueError as error:
+                mensaje.value = str(error)
+                page.update()
+                return
+            finally:
+                db.close()
+            page.pop_dialog()
+            refrescar()
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Eliminar insumo definitivamente"),
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            f"¿Eliminar «{item.nombre}» del inventario? "
+                            "Esta acción no se puede deshacer.",
+                            color="white",
+                        ),
+                        mensaje,
+                    ],
+                ),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
+                    ft.TextButton("Eliminar definitivamente", on_click=eliminar),
+                ],
+            )
+        )
 
     def color_estado(item):
         if item.estado != "ACTIVO":
@@ -51,6 +324,8 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         return "#7AE582"
 
     def texto_estado(item):
+        if item.estado == "ELIMINADO":
+            return "ELIMINADO"
         if item.estado != "ACTIVO":
             return "INACTIVO"
         if item.cantidad <= 0:
@@ -61,7 +336,39 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
 
     def abrir_formulario(item=None):
         nombre = ft.TextField(label="Nombre", value=item.nombre if item else "")
-        categorias = obtener_categorias()
+        db = SessionLocal()
+        try:
+            consulta_proveedores = db.query(proveedores)
+            if item and item.id_proveedor:
+                consulta_proveedores = consulta_proveedores.filter(
+                    (proveedores.estado == "ACTIVO")
+                    | (proveedores.id_proveedor == item.id_proveedor)
+                )
+            else:
+                consulta_proveedores = consulta_proveedores.filter(
+                    proveedores.estado == "ACTIVO"
+                )
+            proveedores_disponibles = consulta_proveedores.order_by(
+                proveedores.nombre.asc()
+            ).all()
+        finally:
+            db.close()
+        proveedor = ft.Dropdown(
+            label="Proveedor",
+            value=(
+                str(item.id_proveedor)
+                if item and item.id_proveedor
+                else "__none__"
+            ),
+            options=[
+                ft.dropdown.Option("__none__", "Sin proveedor específico"),
+                *[
+                    ft.dropdown.Option(str(registro.id_proveedor), registro.nombre)
+                    for registro in proveedores_disponibles
+                ],
+            ],
+        )
+        categorias = obtener_categorias(item.categoria if item else None)
         categoria_nueva = ft.TextField(label="Nueva categoría", visible=False)
         categoria = ft.Dropdown(
             label="Categoría",
@@ -73,10 +380,10 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         )
 
         def cambiar_categoria(e):
-            categoria_nueva.visible = categoria.value == "__nueva__"
+            categoria_nueva.visible = e.control.value == "__nueva__"
             page.update()
 
-        categoria.on_change = cambiar_categoria
+        categoria.on_select = cambiar_categoria
         unidad = ft.TextField(label="Unidad de medida", value=item.unidad_medida if item else "")
         cantidad = ft.TextField(label="Cantidad", value=formato_entero(item.cantidad) if item else "0")
         stock_minimo = ft.TextField(label="Stock mínimo", value=formato_entero(item.stock_minimo) if item else "0")
@@ -113,22 +420,51 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
 
             db = SessionLocal()
             try:
+                categoria_registro = obtener_o_crear_categoria_inventario(
+                    db, categoria_valor
+                )
+                if categoria_registro.estado != "ACTIVO" and (
+                    item is None or categoria_valor != item.categoria
+                ):
+                    mensaje.value = "No puedes asignar un insumo a una categoría inhabilitada o eliminada."
+                    page.update()
+                    return
+                proveedor_id = (
+                    int(proveedor.value)
+                    if proveedor.value and proveedor.value != "__none__"
+                    else None
+                )
                 if item is None:
-                    db.add(
-                        inventario(
-                            nombre=nombre.value.strip(),
-                            categoria=categoria_valor,
-                            unidad_medida=unidad.value.strip(),
-                            cantidad=cantidad_valor,
-                            stock_minimo=stock_minimo_valor,
-                            costo_unitario=costo_unitario_valor,
-                            estado=estado.value or "ACTIVO",
-                        )
+                    registro = inventario(
+                        nombre=nombre.value.strip(),
+                        categoria=categoria_valor,
+                        unidad_medida=unidad.value.strip(),
+                        cantidad=cantidad_valor,
+                        stock_minimo=stock_minimo_valor,
+                        costo_unitario=costo_unitario_valor,
+                        id_proveedor=proveedor_id,
+                        estado=estado.value or "ACTIVO",
                     )
+                    db.add(registro)
                 else:
                     registro = db.query(inventario).filter(inventario.id_inventario == item.id_inventario).first()
                     if not registro:
                         mensaje.value = "No fue posible actualizar el registro."
+                        page.update()
+                        return
+                    if (
+                        registro.id_proveedor != proveedor_id
+                        and db.query(detalles_compras)
+                        .filter(
+                            detalles_compras.id_inventario
+                            == registro.id_inventario
+                        )
+                        .count()
+                    ):
+                        mensaje.value = (
+                            "No puedes cambiar el proveedor de un artículo con compras "
+                            "registradas; conserva su historial y crea otro SKU."
+                        )
                         page.update()
                         return
                     registro.nombre = nombre.value.strip()
@@ -137,8 +473,11 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                     registro.cantidad = cantidad_valor
                     registro.stock_minimo = stock_minimo_valor
                     registro.costo_unitario = costo_unitario_valor
+                    registro.id_proveedor = proveedor_id
                     registro.estado = estado.value or "ACTIVO"
 
+                db.flush()
+                vincular_producto_menu(db, registro)
                 db.commit()
             finally:
                 db.close()
@@ -148,8 +487,14 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
             page.show_dialog(
                 ft.AlertDialog(
                     modal=True,
-                    title=ft.Text("Inventario actualizado", color="#7AE582"),
-                    content=ft.Text(f"Ajuste aplicado a {item.nombre}."),
+                    title=ft.Text(
+                        "Producto agregado" if item is None else "Producto actualizado",
+                        color="#7AE582",
+                    ),
+                    content=ft.Text(
+                        f"Se {'agregó' if item is None else 'actualizó'} "
+                        f"{nombre.value.strip()} correctamente."
+                    ),
                     actions=[ft.TextButton("Aceptar", on_click=lambda e: page.pop_dialog())],
                 )
             )
@@ -164,6 +509,7 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                     scroll="auto",
                     controls=[
                         nombre,
+                        proveedor,
                         categoria,
                         categoria_nueva,
                         unidad,
@@ -222,7 +568,7 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         )
         page.show_dialog(dialog)
 
-    def construir_tabla(items, categoria=None):
+    def construir_tabla(items, categoria=None, proveedores_por_id=None):
         if not items:
             return ft.Container(
                 alignment=ft.Alignment(0, 0),
@@ -233,6 +579,8 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         columnas = [
             ft.DataColumn(ft.Text("Producto")),
             ft.DataColumn(ft.Text("Categoría")),
+            ft.DataColumn(ft.Text("Proveedor")),
+            ft.DataColumn(ft.Text("Costo unitario")),
             ft.DataColumn(ft.Text("Cantidad")),
             ft.DataColumn(ft.Text("Unidad")),
             ft.DataColumn(ft.Text("Stock mínimo")),
@@ -244,15 +592,50 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         for item in items:
             acciones = []
             if es_admin:
-                acciones = [
-                    ft.TextButton("Editar", on_click=lambda e, it=item: abrir_formulario(it)),
-                    ft.TextButton("Ajustar", on_click=lambda e, it=item: abrir_ajuste(it)),
-                ]
+                if item.estado == "ELIMINADO":
+                    acciones = [
+                        ft.TextButton(
+                            "Restaurar",
+                            on_click=lambda e, it=item:
+                                confirmar_estado_insumo(it, "ACTIVO"),
+                        ),
+                    ]
+                else:
+                    acciones = [
+                        ft.TextButton("Editar", on_click=lambda e, it=item: abrir_formulario(it)),
+                        ft.TextButton("Ajustar", on_click=lambda e, it=item: abrir_ajuste(it)),
+                        ft.TextButton(
+                            "Inhabilitar" if item.estado == "ACTIVO" else "Habilitar",
+                            on_click=lambda e, it=item: confirmar_estado_insumo(
+                                it,
+                                "INACTIVO" if it.estado == "ACTIVO" else "ACTIVO",
+                            ),
+                        ),
+                        ft.TextButton(
+                            "Eliminar",
+                            on_click=lambda e, it=item:
+                                confirmar_estado_insumo(it, "ELIMINADO"),
+                        ),
+                    ]
+                if item.estado != "ACTIVO":
+                    acciones.append(
+                        ft.TextButton(
+                            "Eliminar definitivamente",
+                            on_click=lambda e, it=item: confirmar_eliminar_insumo(it),
+                        )
+                    )
             filas.append(
                 ft.DataRow(
                     cells=[
                         ft.DataCell(ft.Text(item.nombre, color="white")),
                         ft.DataCell(ft.Text(item.categoria, color="white")),
+                        ft.DataCell(
+                            ft.Text(
+                                (proveedores_por_id or {}).get(item.id_proveedor, "—"),
+                                color="white",
+                            )
+                        ),
+                        ft.DataCell(ft.Text(formato_pesos(item.costo_unitario), color="white")),
                         ft.DataCell(ft.Text(formato_entero(item.cantidad), color="white")),
                         ft.DataCell(ft.Text(item.unidad_medida, color="white")),
                         ft.DataCell(ft.Text(formato_entero(item.stock_minimo), color="white")),
@@ -319,18 +702,49 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         grupos = {}
         for item in items:
             grupos.setdefault(item.categoria or "Sin categoría", []).append(item)
+        db = SessionLocal()
+        try:
+            proveedores_por_id = obtener_proveedores_por_id(db)
+            estados_categoria = {
+                categoria.nombre: categoria.estado
+                for categoria in db.query(categorias_inventario).all()
+            }
+        finally:
+            db.close()
         return ft.Column(
             spacing=18,
             scroll="auto",
             controls=[
-                construir_tabla(grupo, categoria)
+                construir_tabla(
+                    grupo,
+                    categoria + (
+                        f" ({estados_categoria[categoria]})"
+                        if estados_categoria.get(categoria, "ACTIVO") != "ACTIVO"
+                        else ""
+                    ),
+                    proveedores_por_id,
+                )
                 for categoria, grupo in sorted(grupos.items())
             ],
         )
 
+    def obtener_proveedores_por_id(db=None):
+        cerrar_db = db is None
+        if db is None:
+            db = SessionLocal()
+        try:
+            return {
+                proveedor.id_proveedor: proveedor.nombre
+                for proveedor in db.query(proveedores).all()
+            }
+        finally:
+            if cerrar_db:
+                db.close()
+
     def refrescar():
         texto = filtro["texto"].strip().lower()
-        items = obtener_items()
+        items = obtener_items(mostrar_eliminados["valor"])
+        proveedores_por_id = obtener_proveedores_por_id()
         if texto:
             items = [
                 item
@@ -338,6 +752,7 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                 if texto in item.nombre.lower()
                 or texto in item.categoria.lower()
                 or texto in item.unidad_medida.lower()
+                or texto in proveedores_por_id.get(item.id_proveedor, "").lower()
             ]
         tabla_container.content = construir_tablas_por_categoria(items)
         page.update()
@@ -348,6 +763,16 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
         on_change=lambda e: (filtro.__setitem__("texto", e.control.value or ""), refrescar()),
         border_radius=12,
     )
+
+    def cambiar_visibilidad_eliminados(e):
+        mostrar_eliminados["valor"] = bool(e.control.value)
+        refrescar()
+
+    mostrar_eliminados_control = ft.Checkbox(
+        label="Mostrar eliminados",
+        value=False,
+        on_change=cambiar_visibilidad_eliminados,
+    ) if es_admin else ft.Container()
 
     tabla_container.content = construir_tablas_por_categoria(obtener_items())
 
@@ -370,6 +795,12 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                             on_click=lambda e: abrir_formulario(),
                             visible=es_admin,
                         ) if es_admin else ft.Container(),
+                        ft.Button(
+                            content=ft.Text("Categorías", color="white", weight="bold"),
+                            bgcolor="#5A5F72",
+                            on_click=lambda e: abrir_gestion_categorias(),
+                        ) if es_admin else ft.Container(),
+                        mostrar_eliminados_control,
                     ],
                 ),
                 buscador,

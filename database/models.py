@@ -1,4 +1,17 @@
-from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, ForeignKey, Date
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Float,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import relationship
 from database.database import Base
 import datetime
@@ -52,6 +65,13 @@ class categorias(Base):
     descripcion = Column (String, nullable=True)
     estado = Column(String, nullable=False, default="ACTIVO")
 
+class categorias_inventario(Base):
+    __tablename__ = "categorias_inventario"
+
+    id_categoria_inventario = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String, nullable=False, unique=True)
+    estado = Column(String, nullable=False, default="ACTIVO")
+
 class proveedores(Base):
     __tablename__ = "proveedores"
 
@@ -59,9 +79,28 @@ class proveedores(Base):
     nombre = Column(String, nullable=False)
     que_provee = Column(String, nullable=False, default="")
     telefono = Column(String, nullable=True)
-    correo = Column(String, unique=True, index=True, nullable=False)
+    correo = Column(String, unique=True, index=True, nullable=True)
     cuanto_cobra = Column(Float, nullable=False, default=0)
     estado = Column(String, nullable=False, default="ACTIVO")
+
+class catalogo_proveedores(Base):
+    __tablename__ = "catalogo_proveedores"
+    __table_args__ = (
+        UniqueConstraint(
+            "id_proveedor",
+            "nombre",
+            name="uq_catalogo_proveedor_nombre",
+        ),
+    )
+
+    id_producto_proveedor = Column(Integer, primary_key=True, index=True)
+    id_proveedor = Column(
+        Integer, ForeignKey("proveedores.id_proveedor"), nullable=False, index=True
+    )
+    grupo = Column(String, nullable=False)
+    nombre = Column(String, nullable=False)
+    detalles = Column(Text, nullable=True)
+    precio_unitario = Column(Float, nullable=True)
 
 class categorias_proveedores(Base):
     __tablename__ = "categorias_proveedores"
@@ -82,6 +121,99 @@ class productos(Base):
     id_estado = Column(Integer, ForeignKey("estados_productos.id_estado_producto"), index=True)
     id_proveedor = Column(Integer, ForeignKey("proveedores.id_proveedor"), index=True)
     id_inventario = Column(Integer, ForeignKey("inventario.id_inventario"), index=True, nullable=True)
+
+class mesas(Base):
+    __tablename__ = "mesas"
+
+    id_mesa = Column(Integer, primary_key=True, index=True)
+    numero = Column(Integer, nullable=False, unique=True)
+    estado = Column(String, nullable=False, default="LIBRE")
+
+class cuentas_abiertas(Base):
+    __tablename__ = "cuentas_abiertas"
+    __table_args__ = (
+        Index(
+            "uq_cuenta_abierta_por_mesa",
+            "id_mesa",
+            unique=True,
+            sqlite_where=text("estado = 'ABIERTA'"),
+        ),
+    )
+
+    id_cuenta = Column(Integer, primary_key=True, index=True)
+    id_mesa = Column(Integer, ForeignKey("mesas.id_mesa"), nullable=True, index=True)
+    estado = Column(String, nullable=False, default="ABIERTA", index=True)
+    fecha_apertura = Column(DateTime, nullable=False, default=datetime.datetime.now)
+    fecha_actualizacion = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.datetime.now,
+        onupdate=datetime.datetime.now,
+    )
+    fecha_cierre = Column(DateTime, nullable=True)
+    total = Column(Float, nullable=False, default=0)
+    id_usuario = Column(Integer, ForeignKey("usuarios.id_usuario"), nullable=True)
+    proveedores_json = Column(Text, nullable=True)
+    version = Column(Integer, nullable=False, default=1)
+    modo_division = Column(String, nullable=True)
+    inventario_descontado = Column(Boolean, nullable=False, default=False)
+    whatsapp_cliente = Column(String, nullable=True)
+    whatsapp_estado_envio = Column(String, nullable=True)
+    whatsapp_en_confirmar = Column(Boolean, nullable=False, default=False)
+
+class items_cuenta(Base):
+    __tablename__ = "items_cuenta"
+
+    id_item_cuenta = Column(Integer, primary_key=True, index=True)
+    id_cuenta = Column(
+        Integer, ForeignKey("cuentas_abiertas.id_cuenta"), nullable=False, index=True
+    )
+    id_producto = Column(Integer, ForeignKey("productos.id_producto"), nullable=False)
+    id_inventario = Column(Integer, ForeignKey("inventario.id_inventario"), nullable=True)
+    nombre = Column(String, nullable=False)
+    precio_unitario = Column(Float, nullable=False)
+    cantidad = Column(Integer, nullable=False)
+    personalizacion = Column(Text, nullable=True)
+    agregado_en = Column(DateTime, nullable=False, default=datetime.datetime.now)
+
+class subcuentas(Base):
+    __tablename__ = "subcuentas"
+    __table_args__ = (
+        UniqueConstraint("id_cuenta", "etiqueta", name="uq_subcuenta_etiqueta"),
+    )
+
+    id_subcuenta = Column(Integer, primary_key=True, index=True)
+    id_cuenta = Column(
+        Integer, ForeignKey("cuentas_abiertas.id_cuenta"), nullable=False, index=True
+    )
+    etiqueta = Column(String, nullable=False)
+    total = Column(Float, nullable=False, default=0)
+    costo_proveedor = Column(Float, nullable=False, default=0)
+    id_metodo_pago = Column(Integer, ForeignKey("metodos_pago.id_metodos_pago"), nullable=True)
+    estado = Column(String, nullable=False, default="ABIERTA", index=True)
+    version = Column(Integer, nullable=False, default=1)
+    whatsapp_cliente = Column(String, nullable=True)
+    whatsapp_estado_envio = Column(String, nullable=True)
+    whatsapp_en_confirmar = Column(Boolean, nullable=False, default=False)
+
+class asignaciones_subcuenta(Base):
+    __tablename__ = "asignaciones_subcuenta"
+    __table_args__ = (
+        UniqueConstraint(
+            "id_subcuenta",
+            "id_item_cuenta",
+            name="uq_asignacion_item_subcuenta",
+        ),
+    )
+
+    id_asignacion = Column(Integer, primary_key=True, index=True)
+    id_subcuenta = Column(
+        Integer, ForeignKey("subcuentas.id_subcuenta"), nullable=False, index=True
+    )
+    id_item_cuenta = Column(
+        Integer, ForeignKey("items_cuenta.id_item_cuenta"), nullable=False, index=True
+    )
+    cantidad = Column(Integer, nullable=False)
 
 
 class caja(Base):
@@ -118,6 +250,38 @@ class ventas(Base):
     id_proveedor = Column(Integer, ForeignKey("proveedores.id_proveedor"), index=True, nullable=True)
     proveedores_texto = Column(String, nullable=True)
     costo_proveedor = Column(Float, nullable=False, default=0)
+    id_mesa = Column(Integer, ForeignKey("mesas.id_mesa"), nullable=True, index=True)
+    tipo_pedido = Column(
+        String,
+        nullable=False,
+        default="MOSTRADOR",
+        server_default=text("'MOSTRADOR'"),
+        index=True,
+    )
+    cliente = Column(String, nullable=True)
+    telefono_cliente = Column(String, nullable=True)
+    direccion_domicilio = Column(String, nullable=True)
+    barrio_referencia = Column(String, nullable=True)
+    valor_domicilio = Column(Float, nullable=False, default=0, server_default=text("0"))
+    domiciliario = Column(String, nullable=True)
+    estado_domicilio = Column(String, nullable=True, index=True)
+    whatsapp_cliente = Column(String, nullable=True)
+    whatsapp_estado_envio = Column(String, nullable=True)
+    whatsapp_error = Column(Text, nullable=True)
+
+
+class historial_domicilios(Base):
+    __tablename__ = "historial_domicilios"
+
+    id_historial = Column(Integer, primary_key=True, index=True)
+    id_venta = Column(
+        Integer, ForeignKey("ventas.id_venta"), nullable=False, index=True
+    )
+    id_usuario = Column(Integer, ForeignKey("usuarios.id_usuario"), nullable=True, index=True)
+    fecha_hora = Column(DateTime, nullable=False, default=datetime.datetime.now)
+    estado = Column(String, nullable=False)
+    motivo = Column(String, nullable=True)
+
 
 class estado_ventas(Base):
     __tablename__="estado_ventas"
@@ -132,8 +296,11 @@ class detalle_ventas(Base):
     cantidad  = Column(Integer, nullable=False)
     precio_unitario = Column(Float, nullable=False)
     subtotal  = Column(Float, nullable=False)
+    nombre_producto = Column(String, nullable=True)
+    personalizacion = Column(Text, nullable=True)
     id_venta  = Column(Integer, ForeignKey("ventas.id_venta"), index=True) 
     id_producto  = Column(Integer, ForeignKey("productos.id_producto"), index=True)
+    id_inventario = Column(Integer, ForeignKey("inventario.id_inventario"), index=True, nullable=True)
 
 class compras(Base):
     __tablename__="compras"
@@ -152,6 +319,32 @@ class detalles_compras (Base):
     subtotal = Column(Float, nullable=False)
     id_compra = Column(Integer, ForeignKey("compras.id_compra"), index=True)
     id_inventario = Column(Integer, ForeignKey("inventario.id_inventario"), index=True)
+
+
+class retiros_caja(Base):
+    __tablename__ = "retiros_caja"
+
+    id_retiro = Column(Integer, primary_key=True, index=True)
+    id_caja = Column(Integer, ForeignKey("caja.id_caja"), nullable=False, index=True)
+    id_usuario = Column(Integer, ForeignKey("usuarios.id_usuario"), nullable=True, index=True)
+    fecha_hora = Column(DateTime, nullable=False, default=datetime.datetime.now, index=True)
+    monto = Column(Float, nullable=False)
+    motivo = Column(String, nullable=False)
+
+
+class vinculos_retiro_compra(Base):
+    __tablename__ = "vinculos_retiro_compra"
+
+    id_vinculo = Column(Integer, primary_key=True, index=True)
+    id_retiro = Column(
+        Integer, ForeignKey("retiros_caja.id_retiro"), nullable=False, index=True
+    )
+    id_compra = Column(
+        Integer, ForeignKey("compras.id_compra"), nullable=False, index=True
+    )
+    monto_justificado = Column(Float, nullable=False)
+    fecha_hora = Column(DateTime, nullable=False, default=datetime.datetime.now)
+
 
 class informes(Base):
     __tablename__ = "informes"
@@ -382,6 +575,7 @@ class inventario(Base):
     cantidad = Column(Integer, nullable=False, default=0)
     stock_minimo = Column(Integer, nullable=False, default=0)
     costo_unitario = Column(Float, nullable=False, default=0)
+    id_proveedor = Column(Integer, ForeignKey("proveedores.id_proveedor"), nullable=True, index=True)
     estado = Column(String, nullable=False, default="ACTIVO")
     fecha_creacion = Column(DateTime, nullable=False, default=datetime.datetime.now)
     fecha_actualizacion = Column(DateTime, nullable=False, default=datetime.datetime.now, onupdate=datetime.datetime.now)

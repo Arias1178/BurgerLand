@@ -14,6 +14,8 @@ def construir_navbar(
     compras_habilitadas=True,
     mostrar_contabilidad=None,
     contabilidad_habilitada=True,
+    mostrar_cuentas_abiertas=None,
+    mostrar_usuarios=None,
 ):
 
     def boton_nav(texto, clave, accion, deshabilitado=False, tooltip=None):
@@ -37,10 +39,17 @@ def construir_navbar(
         border_radius=15,
         padding=ft.Padding(left=20, right=20, top=0, bottom=0),
         content=ft.Row(
+            scroll="auto",
             vertical_alignment="center",
             controls=[
                 boton_nav("Inicio", "inicio", mostrar_inicio),
                 boton_nav("Venta", "venta", mostrar_venta),
+                boton_nav(
+                    "Cuentas abiertas",
+                    "cuentas_abiertas",
+                    mostrar_cuentas_abiertas,
+                    deshabilitado=mostrar_cuentas_abiertas is None,
+                ),
                 boton_nav("Historial", "historial", mostrar_historial),
                 boton_nav("Menu", "menu", mostrar_menu),
                 boton_nav("Inventario", "inventario", mostrar_inventario),
@@ -53,6 +62,12 @@ def construir_navbar(
                     mostrar_contabilidad,
                     deshabilitado=not contabilidad_habilitada or mostrar_contabilidad is None,
                     tooltip=None if contabilidad_habilitada else "Cierra la caja del día para habilitar Operatividad Contable",
+                ),
+                boton_nav(
+                    "Usuarios",
+                    "usuarios",
+                    mostrar_usuarios,
+                    deshabilitado=mostrar_usuarios is None,
                 ),
             ]
         )

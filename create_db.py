@@ -7,7 +7,14 @@ from database.models import (
     categorias_gasto, parametros_legales, categorias_proveedores
 )
 from services.auth_service import hash_password
+from services.inventario_service import (
+    sincronizar_categorias_inventario,
+    sincronizar_inventario_catalogo_bebidas,
+)
+from services.proveedores_service import sembrar_catalogo_proveedores
+from services.menu_catalog_service import sembrar_menu
 from database.database import SessionLocal
+from services.mesa_service import sembrar_mesas
 from sqlalchemy import text
 
 
@@ -18,10 +25,115 @@ def _asegurar_columna(db, tabla, columna, definicion_sql):
         db.execute(text(f"ALTER TABLE {tabla} ADD COLUMN {definicion_sql}"))
         db.commit()
 
+
+def _hacer_correo_proveedor_opcional():
+    with engine.connect() as db:
+        columnas = db.exec_driver_sql("PRAGMA table_info(proveedores)").fetchall()
+        correo = next((columna for columna in columnas if columna[1] == "correo"), None)
+        if correo is None or not correo[3]:
+            return
+
+        db.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        db.commit()
+        try:
+            with db.begin():
+                db.exec_driver_sql(
+                    "CREATE TABLE proveedores_migracion ("
+                    "id_proveedor INTEGER NOT NULL PRIMARY KEY, "
+                    "nombre VARCHAR NOT NULL, "
+                    "que_provee VARCHAR NOT NULL, "
+                    "telefono VARCHAR, "
+                    "correo VARCHAR, "
+                    "cuanto_cobra FLOAT NOT NULL, "
+                    "estado VARCHAR NOT NULL)"
+                )
+                db.exec_driver_sql(
+                    "INSERT INTO proveedores_migracion "
+                    "(id_proveedor, nombre, que_provee, telefono, correo, "
+                    "cuanto_cobra, estado) "
+                    "SELECT id_proveedor, nombre, que_provee, telefono, correo, "
+                    "cuanto_cobra, estado FROM proveedores"
+                )
+                db.exec_driver_sql("DROP TABLE proveedores")
+                db.exec_driver_sql(
+                    "ALTER TABLE proveedores_migracion RENAME TO proveedores"
+                )
+                db.exec_driver_sql(
+                    "CREATE INDEX ix_proveedores_id_proveedor "
+                    "ON proveedores (id_proveedor)"
+                )
+                db.exec_driver_sql(
+                    "CREATE UNIQUE INDEX ix_proveedores_correo "
+                    "ON proveedores (correo)"
+                )
+        finally:
+            db.exec_driver_sql("PRAGMA foreign_keys=ON")
+            db.commit()
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    with SessionLocal() as db:
+        _asegurar_columna(
+            db,
+            "cuentas_abiertas",
+            "modo_division",
+            "modo_division VARCHAR",
+        )
+        _asegurar_columna(
+            db,
+            "cuentas_abiertas",
+            "inventario_descontado",
+            "inventario_descontado BOOLEAN NOT NULL DEFAULT 0",
+        )
+        _asegurar_columna(
+            db, "cuentas_abiertas", "whatsapp_cliente", "whatsapp_cliente VARCHAR"
+        )
+        _asegurar_columna(
+            db,
+            "cuentas_abiertas",
+            "whatsapp_estado_envio",
+            "whatsapp_estado_envio VARCHAR",
+        )
+        _asegurar_columna(
+            db,
+            "cuentas_abiertas",
+            "whatsapp_en_confirmar",
+            "whatsapp_en_confirmar BOOLEAN NOT NULL DEFAULT 0",
+        )
+        _asegurar_columna(
+            db, "subcuentas", "whatsapp_cliente", "whatsapp_cliente VARCHAR"
+        )
+        _asegurar_columna(
+            db,
+            "subcuentas",
+            "whatsapp_estado_envio",
+            "whatsapp_estado_envio VARCHAR",
+        )
+        _asegurar_columna(
+            db,
+            "subcuentas",
+            "whatsapp_en_confirmar",
+            "whatsapp_en_confirmar BOOLEAN NOT NULL DEFAULT 0",
+        )
+        _asegurar_columna(
+            db, "ventas", "whatsapp_cliente", "whatsapp_cliente VARCHAR"
+        )
+        _asegurar_columna(
+            db,
+            "ventas",
+            "whatsapp_estado_envio",
+            "whatsapp_estado_envio VARCHAR",
+        )
+        _asegurar_columna(
+            db, "ventas", "whatsapp_error", "whatsapp_error TEXT"
+        )
+    _hacer_correo_proveedor_opcional()
 
     db = SessionLocal()
+
+    sincronizar_categorias_inventario(db)
+    db.commit()
 
     # Año base para los parámetros legales: actualizar anualmente según normativa.
     if not db.query(parametros_legales).filter(parametros_legales.anio == 2026).first():
@@ -58,15 +170,57 @@ def init_db():
     db.commit()
 
     _asegurar_columna(db, "categorias", "estado", "estado VARCHAR NOT NULL DEFAULT 'ACTIVO'")
+    _asegurar_columna(
+        db,
+        "categorias_inventario",
+        "estado",
+        "estado VARCHAR NOT NULL DEFAULT 'ACTIVO'",
+    )
     _asegurar_columna(db, "proveedores", "que_provee", "que_provee VARCHAR NOT NULL DEFAULT ''")
     _asegurar_columna(db, "proveedores", "cuanto_cobra", "cuanto_cobra FLOAT NOT NULL DEFAULT 0")
     _asegurar_columna(db, "proveedores", "estado", "estado VARCHAR NOT NULL DEFAULT 'ACTIVO'")
     _asegurar_columna(db, "detalles_compras", "id_inventario", "id_inventario INTEGER")
     _asegurar_columna(db, "productos", "id_inventario", "id_inventario INTEGER")
+    _asegurar_columna(db, "detalle_ventas", "nombre_producto", "nombre_producto VARCHAR")
+    _asegurar_columna(db, "detalle_ventas", "personalizacion", "personalizacion TEXT")
+    _asegurar_columna(db, "catalogo_proveedores", "precio_unitario", "precio_unitario FLOAT")
+    _asegurar_columna(db, "inventario", "id_proveedor", "id_proveedor INTEGER")
     _asegurar_columna(db, "ventas", "id_proveedor", "id_proveedor INTEGER")
     _asegurar_columna(db, "ventas", "proveedores_texto", "proveedores_texto VARCHAR")
     _asegurar_columna(db, "ventas", "costo_proveedor", "costo_proveedor FLOAT NOT NULL DEFAULT 0")
     _asegurar_columna(db, "informes", "total_proveedores", "total_proveedores FLOAT NOT NULL DEFAULT 0")
+    _asegurar_columna(db, "ventas", "id_mesa", "id_mesa INTEGER")
+    _asegurar_columna(
+        db,
+        "ventas",
+        "tipo_pedido",
+        "tipo_pedido VARCHAR NOT NULL DEFAULT 'MOSTRADOR'",
+    )
+    _asegurar_columna(db, "ventas", "cliente", "cliente VARCHAR")
+    _asegurar_columna(db, "ventas", "telefono_cliente", "telefono_cliente VARCHAR")
+    _asegurar_columna(db, "ventas", "direccion_domicilio", "direccion_domicilio VARCHAR")
+    _asegurar_columna(db, "ventas", "barrio_referencia", "barrio_referencia VARCHAR")
+    _asegurar_columna(
+        db,
+        "ventas",
+        "valor_domicilio",
+        "valor_domicilio FLOAT NOT NULL DEFAULT 0",
+    )
+    _asegurar_columna(db, "ventas", "domiciliario", "domiciliario VARCHAR")
+    _asegurar_columna(db, "ventas", "estado_domicilio", "estado_domicilio VARCHAR")
+    db.execute(
+        text(
+            "UPDATE ventas SET tipo_pedido = 'MESA' "
+            "WHERE id_mesa IS NOT NULL AND tipo_pedido = 'MOSTRADOR'"
+        )
+    )
+    db.commit()
+    _asegurar_columna(
+        db,
+        "detalle_ventas",
+        "id_inventario",
+        "id_inventario INTEGER",
+    )
     _asegurar_columna(db, "nomina", "nombre", "nombre VARCHAR NOT NULL DEFAULT 'Empleado'")
     _asegurar_columna(db, "nomina", "incluido_en_calculo", "incluido_en_calculo BOOLEAN NOT NULL DEFAULT 1")
     _asegurar_columna(db, "deudas", "nombre", "nombre VARCHAR NOT NULL DEFAULT 'Deuda'")
@@ -78,6 +232,10 @@ def init_db():
             categorias_proveedores.nombre == nombre_categoria
         ).first():
             db.add(categorias_proveedores(nombre=nombre_categoria, estado="ACTIVO"))
+    db.commit()
+    sembrar_catalogo_proveedores(db)
+    sincronizar_inventario_catalogo_bebidas(db)
+    sembrar_mesas(db)
     db.commit()
 
     # crear roles
@@ -194,7 +352,12 @@ def init_db():
         {"nombre": "Porción de Papas", "precio": 5500, "descripcion": None, "categoria": cat_adiciones},
     ]
 
-    for p in lista_productos:
+    # Las bases antiguas se completan una vez; el nuevo catálogo mantiene la idempotencia.
+    productos_legado = lista_productos
+    if db.query(categorias).filter(categorias.nombre == "Sándwiches").first():
+        productos_legado = []
+
+    for p in productos_legado:
         if not db.query(productos).filter(productos.nombre == p["nombre"]).first():
             nuevo_producto = productos(
                 nombre=p["nombre"],
@@ -209,6 +372,8 @@ def init_db():
 
     db.commit()
     print(f"{len(lista_productos)} productos verificados/creados.")
+    total_menu = sembrar_menu(db)
+    print(f"{total_menu} productos del menú sincronizados.")
 
     # Sin datos de ejemplo: proveedores e inventario los crea el propietario desde la app.
     # crear estados de usuario
