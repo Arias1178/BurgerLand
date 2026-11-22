@@ -6,11 +6,12 @@ import os
 
 from sqlalchemy.orm import Session
 
-from database.models import Usuario
+from database.models import Usuario, rol
 
 
 _ITERATIONS = 200_000
 _ALGORITHM = "pbkdf2_sha256"
+_ADMIN_EMAIL = "admin@burguerland.com"
 
 
 def hash_password(password: str) -> str:
@@ -51,6 +52,17 @@ def authenticate_user(db: Session, correo: str, password: str):
         return None
 
     value = correo.strip().lower()
-    user = db.query(Usuario).filter(Usuario.correo == value).first()
+    admin_alias = value == "admin"
+    if admin_alias:
+        value = _ADMIN_EMAIL
 
-    return user if user and verify_password(password, user.contraseña) else None
+    user = db.query(Usuario).filter(Usuario.correo == value).first()
+    if not user or not verify_password(password, user.contraseña):
+        return None
+
+    if admin_alias:
+        perfil = db.query(rol).filter(rol.id_rol == user.id_rol).first()
+        if not perfil or perfil.nombre.upper() != "ADMIN":
+            return None
+
+    return user

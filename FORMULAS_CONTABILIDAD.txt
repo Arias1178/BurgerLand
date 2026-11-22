@@ -1,0 +1,257 @@
+BURGERLAND - FORMULAS DEL APARTADO DE CONTABILIDAD
+==================================================
+
+Alcance
+-------
+Este documento describe los calculos implementados en el cierre de caja,
+la Operatividad Contable y el panel financiero. Los porcentajes legales y
+tributarios son parametros configurables o valores iniciales del sistema;
+deben verificarse antes de usarlos para declaraciones o decisiones legales.
+
+Notacion
+--------
+Σ significa sumar los valores que cumplen el filtro descrito.
+Las tasas se representan como decimales: 8 % = 0.08.
+Los resultados monetarios del motor financiero se redondean a dos decimales.
+
+
+1. ARQUEO Y CIERRE DE CAJA
+--------------------------
+Flujo conectado a la aplicacion:
+main.py, cerrar_caja() y calcular_saldo_final_caja().
+
+1.1 Ventas por medio de pago
+    Ventas del medio = Σ ventas.total de la caja para ese metodo de pago.
+    Ventas totales = Σ ventas.total de la caja.
+
+    Se usa para generar el informe con los totales del turno desglosados por
+    efectivo, tarjeta y Nequi.
+
+1.2 Egresos de caja menor
+    Egresos de caja menor = Σ movimientos de la caja cuyo tipo es EGRESO,
+    GASTO o CAJA_CHICA.
+
+    Se usa para descontar las salidas de efectivo del saldo teorico.
+
+1.3 Saldo teorico
+    Saldo final = saldo inicial + ventas en efectivo - egresos de caja menor.
+
+    Es el saldo final guardado en caja e informes al cerrar. Las ventas pagadas
+    con tarjeta o Nequi no aumentan este saldo. El flujo de la interfaz actual
+    no solicita ni compara un conteo fisico.
+
+1.4 Rutina de arqueo fisico disponible
+    Ubicacion: services/cierre_caja_service.py, procesar_cierre_caja().
+    Esta rutina existe en el repositorio, pero main.cerrar_caja() no la invoca.
+
+    Ventas por medio = Σ pagos de ordenes PAGADAS agrupados por medio
+    Saldo teorico = saldo inicial + ventas en efectivo - egresos de caja menor
+    Diferencia = redondear(saldo fisico contado - saldo teorico, 2)
+    Efectivo a consignar = redondear(saldo fisico contado
+                                     - base del siguiente turno, 2)
+
+    Resultado positivo: sobrante. Resultado negativo: faltante. El valor se
+    guarda en el asiento y en el resumen. Si supera la tolerancia configurada,
+    esta rutina puede impedir el cierre o permitirlo dejando una observacion.
+    Las ventas con tarjeta o transferencia no aumentan el efectivo esperado.
+
+
+2. CONSOLIDACION DE OPERATIVIDAD CONTABLE POR CAJA
+--------------------------------------------------
+Ubicacion: services/contabilidad_service.py, procesar_consolidacion_contable().
+La caja debe estar cerrada o completada antes de procesar la consolidacion.
+
+2.1 Venta bruta
+    Venta bruta = Σ ventas.total asociadas a la caja.
+
+    Es el total de ventas tomado de los registros de venta para esa caja.
+
+2.2 Desglose de venta bruta a neto e impuestos
+    divisor = 1 + tasa de Impoconsumo + tasa de IVA
+    Venta neta = venta bruta / divisor
+    Impoconsumo = venta neta * tasa de Impoconsumo
+    IVA = venta neta * tasa de IVA
+
+    La implementacion considera que las tasas se aplican sobre la venta neta
+    incluida dentro de la venta bruta. Por ejemplo, con venta bruta de 108 y
+    tasa de Impoconsumo de 0.08, sin IVA: venta neta = 100 e Impoconsumo = 8.
+    La tasa predeterminada de Impoconsumo es 0.08 y la de IVA es 0.0; la vista
+    permite ingresar ambas tasas para cada proceso.
+
+2.3 Costo de ventas de la consolidacion
+    Costo de ventas = Σ ventas.costo_proveedor de la caja.
+
+    Se guarda como costo asociado a las ventas y se resta de la venta neta.
+    Este calculo usa el costo_proveedor registrado en cada venta.
+
+2.4 Utilidad bruta de la consolidacion
+    Utilidad bruta = venta neta - costo de ventas.
+
+    Se muestra junto con venta bruta, venta neta, impuestos, propinas y costo.
+    Las propinas se registran aparte; no se suman a venta neta ni a utilidad
+    bruta en esta formula.
+
+
+3. CIERRE CONTABLE DIARIO / ESTADO DE RESULTADOS RESUMIDO
+---------------------------------------------------------
+Ubicacion: services/contabilidad_service.py,
+generar_cierre_contable() y obtener_estado_resultados().
+
+3.1 Costo historico de ventas
+    Costo de ventas = Σ (cantidad vendida del producto
+                         * ultimo costo unitario vigente en la fecha de venta).
+
+    Se usa en generar_cierre_contable(). Busca, para cada linea de venta, el
+    ultimo costo_producto cuya fecha_actualizacion no sea posterior a la fecha
+    de venta. Si no encuentra costo, usa cero. Este metodo es distinto del
+    costo_proveedor agregado por venta que usa la consolidacion anterior.
+
+3.2 Cierre diario
+    Ingresos totales = Σ ventas.total de la caja
+    Utilidad bruta = ingresos totales - costo de ventas
+    Gastos del dia = Σ gastos.valor con fecha igual a la fecha de cierre
+    Utilidad operacional = utilidad bruta - gastos del dia
+    Margen bruto (%) = (utilidad bruta / ingresos totales) * 100
+
+    Si ingresos totales es cero, el margen bruto se registra como cero. El
+    cierre diario guarda estos resultados en cierre_contable.
+
+3.3 Estado de resultados para un periodo
+    Ingresos totales = Σ ingresos_totales de cierres en el periodo
+    Costo de ventas = Σ costo_ventas de cierres en el periodo
+    Utilidad bruta = ingresos totales - costo de ventas
+    Gastos fijos = Σ gastos.valor en el periodo con categoria de gasto
+                   asociada (id_categoria_gasto no nulo)
+    Nomina total = Σ costo_total_empleador de nominas cuyo periodo mensual
+                   queda dentro del rango de meses seleccionado
+    Utilidad operacional = utilidad bruta - gastos fijos - nomina total
+    Margen bruto (%) = (utilidad bruta / ingresos totales) * 100
+    Impuesto al consumo = ingresos totales * tarifa_impoconsumo
+    RST = ingresos totales * tarifa_rst
+
+    Si ingresos totales es cero, el margen bruto es cero. Impuesto al consumo
+    y RST se presentan como calculos separados: estas cifras no se restan de
+    utilidad operacional en la formula implementada.
+
+
+4. NOMINA MENSUAL CON PARAMETROS LEGALES
+----------------------------------------
+Ubicacion: services/contabilidad_service.py, calcular_nomina_mensual().
+
+Si salario base <= 2 * SMLV:
+    Auxilio = auxilio de transporte
+En otro caso:
+    Auxilio = 0
+
+    Salud empleador = salario base * porcentaje de salud
+    Pension empleador = salario base * porcentaje de pension
+    ARL = salario base * porcentaje de ARL
+    Caja compensacion = salario base * porcentaje de caja
+    Base cesantias = salario base + auxilio
+    Provision cesantias = base cesantias * porcentaje de cesantias
+    Intereses cesantias = provision cesantias * porcentaje de intereses
+    Provision prima = base cesantias * porcentaje de prima
+    Provision vacaciones = salario base * porcentaje de vacaciones
+
+    Costo total empleador = salario base + auxilio
+                            + salud + pension + ARL + caja compensacion
+                            + cesantias + intereses de cesantias
+                            + prima + vacaciones
+
+    El resultado mensual se guarda en nomina_mensual. Las tasas y montos
+    provienen de parametros_legales para el ano correspondiente; si no existen,
+    el servicio crea parametros predeterminados.
+
+
+5. ANALISIS FINANCIERO: PERDIDAS Y GANANCIAS (P&L)
+-------------------------------------------------
+Ubicacion: services/financial_engine.py, calculate_pnl().
+Presentacion: views/contabilidad.py, panel financiero.
+
+Para transacciones y ventas del periodo:
+    Ingresos = Σ transacciones de tipo ingreso
+               + Σ ventas.total
+    Costos variables = Σ gastos tipo gasto_variable
+                       + Σ servicios tipo variable incluidos
+    Utilidad bruta = ingresos - costos variables
+    Gastos fijos operativos = Σ gastos tipo gasto_fijo
+                              + Σ servicios tipo fijo incluidos
+                              + Σ costo total de nomina incluida
+    Utilidad operativa = utilidad bruta - gastos fijos operativos
+    Gastos financieros = Σ transacciones gasto_financiero
+                         + Σ intereses de deudas incluidas
+    Utilidad neta = utilidad operativa - gastos financieros
+
+    La vista muestra ingresos, utilidad bruta, utilidad operativa y utilidad
+    neta. El motor P&L incluye transacciones sin importar si estan pagadas;
+    respeta el periodo y la opcion de incluir servicios, nomina y deudas.
+    Como los ingresos manuales y ventas se suman por separado, registra una
+    venta en transacciones solo si no estas duplicando un importe ya guardado
+    como venta.
+
+    Costo de un empleado de este panel:
+        Remuneracion = salario base + comisiones
+        Costo empleado = remuneracion
+                         * (1 + cargas_sociales_porcentaje / 100)
+
+    Este calculo de Payroll es el usado por el panel financiero. Es distinto
+    del desglose de provisiones de nomina_mensual descrito en la seccion 4.
+
+
+6. ANALISIS FINANCIERO: FLUJO DE CAJA Y PENDIENTES
+--------------------------------------------------
+Ubicacion: services/financial_engine.py, calculate_cash_flow().
+Presentacion: tarjetas Flujo neto, Salidas de caja, Abonos a capital,
+Por pagar y Por cobrar, mas el detalle de pendientes.
+
+    Entradas = Σ transacciones de ingreso pagadas + Σ ventas.total
+    Salidas = Σ transacciones no-ingreso pagadas
+              + Σ servicios pagados e incluidos
+              + Σ capital de deudas pagado e incluido
+              + Σ intereses de deudas pagados e incluidos
+    Flujo neto = entradas - salidas
+    Abonos a capital = Σ abonos de capital de deudas pagadas e incluidas
+
+    Por pagar = Σ transacciones no pagadas
+                + servicios no pagados e incluidos
+                + cuotas de deudas no pagadas e incluidas
+    Por cobrar = Σ transacciones de ingreso no pagadas
+
+    Para una deuda pendiente, se muestra cuota_mensual si es mayor que cero;
+    si no, se usa abono_capital + pago_interes. Los pagos pendientes se muestran
+    aparte y no reducen el flujo neto. La utilidad neta descuenta los intereses,
+    pero no los abonos a capital. En este panel, las ventas suministradas se
+    agregan a entradas como ventas.total.
+
+
+7. PUNTO DE EQUILIBRIO
+----------------------
+Ubicacion principal: services/financial_engine.py, calculate_break_even().
+Presentacion: tarjeta Punto de equilibrio del panel financiero.
+
+    Margen de contribucion = (ingresos - costos variables) / ingresos
+    Punto de equilibrio = gastos fijos operativos / margen de contribucion
+
+    El resultado indica ventas estimadas necesarias para cubrir los gastos
+    fijos operativos segun el margen promedio del periodo. Si no hay ingresos o
+    el margen de contribucion no es positivo, el motor no calcula el valor y la
+    vista muestra "Sin datos suficientes".
+
+Tambien existe un helper en services/contabilidad_service.py:
+
+    Punto de equilibrio = costos fijos mensuales / (margen bruto porcentual / 100)
+
+    Ese helper requiere margen bruto mayor que cero. No es el metodo que usa la
+    tarjeta del panel financiero; dicha tarjeta usa calculate_break_even().
+
+
+8. ALCANCES IMPORTANTES
+-----------------------
+- Los cierres, la consolidacion y el P&L usan fuentes de datos distintas y
+  tienen reglas de costos diferentes; los resultados no deben mezclarse sin
+  revisar el origen.
+- El panel financiero P&L y el flujo de caja usan los registros del motor
+  FinancialEngine. El estado de resultados resumido usa cierres_contables,
+  gastos y nomina_mensual.
+- Las tasas predeterminadas no garantizan cumplimiento tributario. Confirma su
+  aplicabilidad y actualizacion con la persona responsable de contabilidad.
