@@ -34,6 +34,7 @@ class InformesTests(unittest.TestCase):
             def __init__(self):
                 self.font = ("Helvetica", 10)
                 self.drawn = []
+                self.images = []
 
             def saveState(self):
                 pass
@@ -59,10 +60,18 @@ class InformesTests(unittest.TestCase):
             def drawRightString(self, x, y, text):
                 self.drawn.append((x - self.stringWidth(text, *self.font), y, text, self.font))
 
+            def drawImage(self, *args, **kwargs):
+                self.images.append((args, kwargs))
+
         canvas = CanvasStub()
         titulo = "INFORME COMPARATIVO QUINCENAL - CONTABILIDAD"
         periodo = "Actual: 01/11/2026 - 15/11/2026"
-        _encabezado_pdf(canvas, SimpleNamespace(page=1), titulo, periodo)
+        _encabezado_pdf(
+            canvas,
+            SimpleNamespace(page=1, rightMargin=36),
+            titulo,
+            periodo,
+        )
 
         titulo_drawn, periodo_drawn, pagina_drawn = canvas.drawn
         self.assertLessEqual(
@@ -73,6 +82,9 @@ class InformesTests(unittest.TestCase):
             periodo_drawn[0] + stringWidth(periodo_drawn[2], *periodo_drawn[3]),
             pagina_drawn[0] - 10,
         )
+        self.assertEqual(canvas.images[0][1]["width"], 28)
+        self.assertEqual(canvas.images[0][1]["height"], 28)
+        self.assertEqual(canvas.images[0][0][2], 8)
 
     def test_business_pdf_starts_below_header_without_repeating_title(self):
         documento = MagicMock()

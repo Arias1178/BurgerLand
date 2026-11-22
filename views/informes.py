@@ -1,5 +1,6 @@
 import os
 import calendar
+from io import BytesIO
 import math
 from collections import defaultdict
 from pathlib import Path
@@ -15,6 +16,7 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import func, or_
 
@@ -32,6 +34,7 @@ from database.models import (
     ventas,
 )
 from services.financial_engine import FinancialEngine
+from services.logo_service import obtener_logo_png
 
 
 ALTURA_ENCABEZADO_PDF = 72
@@ -619,6 +622,14 @@ def _encabezado_pdf(canvas, doc, titulo, fecha_texto):
     canvas.drawString(40, height - 50, fecha_texto)
     canvas.setFont("Helvetica", 9)
     canvas.drawRightString(width - 40, height - 50, texto_pagina)
+    canvas.drawImage(
+        ImageReader(BytesIO(obtener_logo_png())),
+        width - doc.rightMargin - 28,
+        8,
+        width=28,
+        height=28,
+        mask="auto",
+    )
     canvas.restoreState()
 
 
@@ -866,7 +877,19 @@ def _generar_pdf_informe(informe):
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.HexColor("#5A5F72"))
         canvas.drawString(doc.leftMargin, 22, "BurgerLand - Reporte de caja")
-        canvas.drawRightString(letter[0] - doc.rightMargin, 22, f"Página {doc.page}")
+        canvas.drawRightString(
+            letter[0] - doc.rightMargin - 36,
+            22,
+            f"Página {doc.page}",
+        )
+        canvas.drawImage(
+            ImageReader(BytesIO(obtener_logo_png())),
+            letter[0] - doc.rightMargin - 28,
+            5,
+            width=28,
+            height=28,
+            mask="auto",
+        )
         canvas.restoreState()
 
     def dibujar_pagina(canvas, doc):

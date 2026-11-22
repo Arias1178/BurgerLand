@@ -40,6 +40,7 @@ from views.cuentas_abiertas import cuentas_abiertas_view
 from views.contabilidad import contabilidad_view
 from views.usuarios import usuarios_view
 from services.contabilidad_service import can_process_accounting, obtener_ultima_caja_cerrada, generar_cierre_contable
+from services.logo_service import obtener_logo_png
 from services.retiros_caja_service import registrar_retiro
 
 usuario_actual = {"valor": None}  # guardamos el usuario logueado aquí
@@ -279,7 +280,23 @@ async def main(page: ft.Page):
     def navegar(vista):
         page.controls.clear()
         page.update()
-        page.add(vista)
+        page.add(
+            ft.Stack(
+                expand=True,
+                controls=[
+                    vista,
+                    ft.Image(
+                        src=obtener_logo_png(),
+                        width=76,
+                        height=76,
+                        fit=ft.BoxFit.CONTAIN,
+                        right=18,
+                        bottom=18,
+                        tooltip="BurgerLand",
+                    ),
+                ],
+            )
+        )
         page.update()
 
     def usuario_es_admin():
