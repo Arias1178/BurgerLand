@@ -24,6 +24,7 @@ from database.models import (
     informes,
     movimiento_caja,
     rol,
+    estado_usuarios,
 )
 from views.login import login_view
 from views.inicio import inicio_view
@@ -279,8 +280,7 @@ async def main(page: ft.Page):
 
     def navegar(vista):
         page.controls.clear()
-        page.update()
-        page.add(
+        page.controls.append(
             ft.Stack(
                 expand=True,
                 controls=[
@@ -309,6 +309,13 @@ async def main(page: ft.Page):
             if usuario_db is None:
                 return False
             usuario.id_rol = usuario_db.id_rol
+            if usuario_db.id_estado is not None:
+                estado_usuario = db.get(estado_usuarios, usuario_db.id_estado)
+                if (
+                    estado_usuario is None
+                    or estado_usuario.nombre.upper() != "ACTIVO"
+                ):
+                    return False
             perfil = db.get(rol, usuario_db.id_rol)
             return bool(perfil and perfil.nombre == "ADMIN")
         finally:
@@ -317,9 +324,38 @@ async def main(page: ft.Page):
     def get_navbar(activo):
         db = SessionLocal()
         try:
+            usuario = usuario_actual["valor"]
+            usuario_db = (
+                db.get(Usuario, usuario.id_usuario) if usuario else None
+            )
+            es_admin = False
+            if usuario_db:
+                usuario.id_rol = usuario_db.id_rol
+                perfil = db.get(rol, usuario_db.id_rol)
+                estado_usuario = (
+                    db.get(estado_usuarios, usuario_db.id_estado)
+                    if usuario_db.id_estado is not None
+                    else None
+                )
+                usuario_activo = (
+                    usuario_db.id_estado is None
+                    or bool(
+                        estado_usuario
+                        and estado_usuario.nombre.upper() == "ACTIVO"
+                    )
+                )
+                es_admin = bool(
+                    usuario_activo and perfil and perfil.nombre == "ADMIN"
+                )
             estado_cerrada = obtener_estado_caja(db, "CERRADA")
-            hay_cierre = bool(estado_cerrada and db.query(caja).filter(caja.id_estado_caja == estado_cerrada.id_estado_caja).count() > 0)
-            contabilidad_habilitada = usuario_es_admin() or hay_cierre
+            hay_cierre = bool(
+                estado_cerrada
+                and db.query(caja)
+                .filter(caja.id_estado_caja == estado_cerrada.id_estado_caja)
+                .count()
+                > 0
+            )
+            contabilidad_habilitada = es_admin or hay_cierre
         finally:
             db.close()
         return construir_navbar(
@@ -333,15 +369,11 @@ async def main(page: ft.Page):
             mostrar_proveedores=lambda: mostrar_proveedores(),
             mostrar_compras=lambda: mostrar_compras(),
             mostrar_informes=lambda: mostrar_informes(),
-            compras_habilitadas=usuario_es_admin(),
+            compras_habilitadas=es_admin,
             mostrar_contabilidad=lambda: mostrar_contabilidad(),
             contabilidad_habilitada=contabilidad_habilitada,
             mostrar_cuentas_abiertas=lambda: mostrar_cuentas_abiertas(),
-            mostrar_usuarios=(
-                (lambda: mostrar_gestion_usuarios())
-                if usuario_es_admin()
-                else None
-            ),
+            mostrar_usuarios=(lambda: mostrar_gestion_usuarios()) if es_admin else None,
         )
 
     def obtener_caja_para_contabilidad(usuario_id):
@@ -594,14 +626,19 @@ async def main(page: ft.Page):
                 page,
                 get_navbar("usuarios"),
                 usuario_actual=usuario_actual["valor"],
+                on_cerrar_sesion=cerrar_sesion,
             )
         )
 
     def mostrar_login():
+        usuario_actual["valor"] = None
         page.horizontal_alignment = "center"
         page.vertical_alignment = "center"
         page.padding = 0
         navegar(login_view(page, on_login_success=mostrar_inicio))
+
+    def cerrar_sesion():
+        mostrar_login()
 
     mostrar_login()
 

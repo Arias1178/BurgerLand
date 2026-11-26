@@ -1,5 +1,4 @@
 import datetime
-import json
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from sqlalchemy import update
@@ -23,7 +22,6 @@ from services.mesa_service import (
     ESTADO_MESA_OCUPADA,
     validar_mesa_disponible,
 )
-from services.whatsapp_service import validar_numero_colombiano
 
 
 class CuentaModificadaError(ValueError):
@@ -120,80 +118,6 @@ def listar_subcuentas(db: Session, cuenta_id: int) -> list[dict]:
     return resultado
 
 
-def actualizar_estado_whatsapp_cuenta(
-    db: Session,
-    cuenta_id: int,
-    estado: str,
-) -> None:
-    if estado not in {"PENDIENTE", "ENVIADO", "ERROR"}:
-        raise ValueError("El estado de WhatsApp no es válido.")
-    resultado = db.execute(
-        update(cuentas_abiertas)
-        .where(
-            cuentas_abiertas.id_cuenta == cuenta_id,
-            cuentas_abiertas.estado == "ABIERTA",
-        )
-        .values(whatsapp_estado_envio=estado)
-    )
-    if resultado.rowcount != 1:
-        db.rollback()
-        raise ValueError("No se encontró la cuenta abierta para actualizar WhatsApp.")
-    db.commit()
-
-
-def actualizar_contacto_subcuenta(
-    db: Session,
-    subcuenta_id: int,
-    version: int,
-    whatsapp_cliente: str,
-    whatsapp_en_confirmar: bool,
-) -> subcuentas:
-    numero = validar_numero_colombiano(whatsapp_cliente)
-    resultado = db.execute(
-        update(subcuentas)
-        .where(
-            subcuentas.id_subcuenta == subcuenta_id,
-            subcuentas.estado == "ABIERTA",
-            subcuentas.version == version,
-        )
-        .values(
-            whatsapp_cliente=numero,
-            whatsapp_estado_envio="PENDIENTE",
-            whatsapp_en_confirmar=bool(whatsapp_en_confirmar),
-            version=version + 1,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    if resultado.rowcount != 1:
-        db.rollback()
-        raise CuentaModificadaError(
-            "Otro cajero modificó esta subcuenta. Recarga la cuenta."
-        )
-    db.commit()
-    subcuenta = db.get(subcuentas, subcuenta_id)
-    if subcuenta is None:
-        raise ValueError("No se encontró la subcuenta después de guardar WhatsApp.")
-    return subcuenta
-
-
-def actualizar_estado_whatsapp_subcuenta(
-    db: Session,
-    subcuenta_id: int,
-    estado: str,
-) -> None:
-    if estado not in {"PENDIENTE", "ENVIADO", "ERROR"}:
-        raise ValueError("El estado de WhatsApp no es válido.")
-    resultado = db.execute(
-        update(subcuentas)
-        .where(subcuentas.id_subcuenta == subcuenta_id)
-        .values(whatsapp_estado_envio=estado)
-    )
-    if resultado.rowcount != 1:
-        db.rollback()
-        raise ValueError("No se encontró la subcuenta para actualizar WhatsApp.")
-    db.commit()
-
-
 def _etiquetas_subcuenta(cantidad: int) -> list[str]:
     if cantidad < 2:
         raise ValueError("La división debe tener al menos dos subcuentas.")
@@ -209,30 +133,6 @@ def _etiquetas_subcuenta(cantidad: int) -> list[str]:
             etiqueta = chr(65 + resto) + etiqueta
         etiquetas.append(etiqueta)
     return etiquetas
-
-
-def _prorratear_proveedores(proveedores: list[dict], totales: list[float]) -> list[list[dict]]:
-    suma_totales = sum(totales)
-    por_subcuenta = [[] for _ in totales]
-    for proveedor in proveedores:
-        try:
-            costo = float(proveedor.get("costo", 0))
-        except (TypeError, ValueError):
-            raise ValueError("El costo asociado a un proveedor no es válido.")
-        if costo < 0:
-            raise ValueError("El costo asociado a un proveedor no puede ser negativo.")
-        acumulado = 0.0
-        for indice, total in enumerate(totales):
-            if indice == len(totales) - 1:
-                costo_parte = round(costo - acumulado, 2)
-            elif suma_totales:
-                costo_parte = round(costo * total / suma_totales, 2)
-                acumulado += costo_parte
-            else:
-                costo_parte = round(costo / len(totales), 2)
-                acumulado += costo_parte
-            por_subcuenta[indice].append({**proveedor, "costo": costo_parte})
-    return por_subcuenta
 
 
 def _crear_subcuentas(
@@ -358,8 +258,6 @@ def _crear_subcuentas(
     else:
         raise ValueError("El modo de división no es válido.")
 
-    proveedores = json.loads(cuenta.proveedores_json or "[]")
-    proveedores_por_subcuenta = _prorratear_proveedores(proveedores, totales)
     resultado = db.execute(
         update(cuentas_abiertas)
         .where(
@@ -383,10 +281,7 @@ def _crear_subcuentas(
     cuenta.modo_division = modo
     cuenta.version = version + 1
     cuenta.fecha_actualizacion = datetime.datetime.now()
-    for indice, subcuenta in enumerate(cuentas_creadas):
-        subcuenta.costo_proveedor = sum(
-            proveedor["costo"] for proveedor in proveedores_por_subcuenta[indice]
-        )
+    for subcuenta in cuentas_creadas:
         db.add(subcuenta)
     db.flush()
     if modo == "ITEMS":
@@ -491,26 +386,16 @@ def guardar_cuenta_abierta(
     db: Session,
     carrito: list[dict],
     mesa_id: int | None,
-    proveedores_seleccionados: list[dict] | None = None,
     usuario_id: int | None = None,
     cuenta_id: int | None = None,
     version: int | None = None,
-    whatsapp_cliente: str | None = None,
-    whatsapp_en_confirmar: bool = False,
 ) -> cuentas_abiertas:
     items = _normalizar_items(carrito)
-    proveedores = proveedores_seleccionados or []
-    whatsapp_cliente = (
-        validar_numero_colombiano(whatsapp_cliente)
-        if whatsapp_cliente and whatsapp_cliente.strip()
-        else None
-    )
     for item in items:
         if db.get(productos, item["id_producto"]) is None:
             raise ValueError(
                 f"El producto «{item['nombre']}» ya no está disponible en el menú."
             )
-    proveedores_json = json.dumps(proveedores, ensure_ascii=False)
     total = sum(item["precio_unitario"] * item["cantidad"] for item in items)
     ahora = datetime.datetime.now()
 
@@ -524,13 +409,7 @@ def guardar_cuenta_abierta(
                 fecha_actualizacion=ahora,
                 total=total,
                 id_usuario=usuario_id,
-                proveedores_json=proveedores_json,
                 version=1,
-                whatsapp_cliente=whatsapp_cliente,
-                whatsapp_estado_envio=(
-                    "PENDIENTE" if whatsapp_cliente else None
-                ),
-                whatsapp_en_confirmar=bool(whatsapp_en_confirmar),
             )
             db.add(cuenta)
             db.flush()
@@ -556,12 +435,6 @@ def guardar_cuenta_abierta(
                 .values(
                     id_mesa=mesa_id,
                     total=total,
-                    proveedores_json=proveedores_json,
-                    whatsapp_cliente=whatsapp_cliente,
-                    whatsapp_estado_envio=(
-                        "PENDIENTE" if whatsapp_cliente else None
-                    ),
-                    whatsapp_en_confirmar=bool(whatsapp_en_confirmar),
                     fecha_actualizacion=ahora,
                     version=version + 1,
                 )
@@ -574,12 +447,6 @@ def guardar_cuenta_abierta(
             db.flush()
             cuenta.id_mesa = mesa_id
             cuenta.total = total
-            cuenta.proveedores_json = proveedores_json
-            cuenta.whatsapp_cliente = whatsapp_cliente
-            cuenta.whatsapp_estado_envio = (
-                "PENDIENTE" if whatsapp_cliente else None
-            )
-            cuenta.whatsapp_en_confirmar = bool(whatsapp_en_confirmar)
             cuenta.fecha_actualizacion = ahora
             cuenta.version = version + 1
             db.query(items_cuenta).filter(
@@ -618,9 +485,6 @@ def cobrar_cuenta_abierta(
     usuario_actual,
     caja_actual,
     carrito: list[dict] | None = None,
-    proveedores_seleccionados: list[dict] | None = None,
-    whatsapp_cliente: str | None = None,
-    whatsapp_en_confirmar: bool | None = None,
 ):
     from services.venta_service import registrar_venta
 
@@ -663,16 +527,6 @@ def cobrar_cuenta_abierta(
             ]
         )
 
-    proveedores_cuenta = (
-        proveedores_seleccionados
-        if proveedores_seleccionados is not None
-        else json.loads(cuenta.proveedores_json or "[]")
-    )
-    whatsapp_cuenta = (
-        validar_numero_colombiano(whatsapp_cliente)
-        if whatsapp_cliente and whatsapp_cliente.strip()
-        else cuenta.whatsapp_cliente
-    )
     valores_actualizacion = {
         "estado": "PAGADA",
         "fecha_cierre": datetime.datetime.now(),
@@ -682,19 +536,6 @@ def cobrar_cuenta_abierta(
         valores_actualizacion["total"] = sum(
             item["precio"] * item["cantidad"] for item in carrito_venta
         )
-        valores_actualizacion["proveedores_json"] = json.dumps(
-            proveedores_cuenta,
-            ensure_ascii=False,
-        )
-    valores_actualizacion.update(
-        whatsapp_cliente=whatsapp_cuenta,
-        whatsapp_estado_envio="PENDIENTE" if whatsapp_cuenta else None,
-        whatsapp_en_confirmar=(
-            cuenta.whatsapp_en_confirmar
-            if whatsapp_en_confirmar is None
-            else bool(whatsapp_en_confirmar)
-        ),
-    )
     resultado = db.execute(
         update(cuentas_abiertas)
         .where(
@@ -718,11 +559,9 @@ def cobrar_cuenta_abierta(
             metodo_id=metodo_id,
             usuario_actual=usuario_actual,
             caja_actual=caja_actual,
-            proveedores_seleccionados=proveedores_cuenta,
             mesa_id=cuenta.id_mesa,
             commit=False,
             mesa_cuenta_abierta=True,
-            whatsapp_cliente=whatsapp_cuenta,
         )
         if cuenta.id_mesa is not None:
             mesa = db.get(mesas, cuenta.id_mesa)
@@ -780,10 +619,12 @@ def cobrar_subcuenta(
     metodo_id: int,
     usuario_actual,
     caja_actual,
-    whatsapp_cliente: str | None = None,
-    whatsapp_en_confirmar: bool | None = None,
 ):
-    from services.venta_service import _cargar_inventario_venta, registrar_venta
+    from services.venta_service import (
+        _cargar_inventario_venta,
+        _guardar_consumos_inventario,
+        registrar_venta,
+    )
 
     cuenta = obtener_cuenta_abierta(db, cuenta_id)
     if cuenta.modo_division is None:
@@ -803,12 +644,6 @@ def cobrar_subcuenta(
         raise CuentaModificadaError(
             "Otro cajero modificó esta subcuenta. Recarga la cuenta."
         )
-    whatsapp_subcuenta = (
-        validar_numero_colombiano(whatsapp_cliente)
-        if whatsapp_cliente and whatsapp_cliente.strip()
-        else subcuenta.whatsapp_cliente
-    )
-
     otras_pendientes = (
         db.query(subcuentas)
         .filter(
@@ -848,15 +683,6 @@ def cobrar_subcuenta(
             estado="PAGADA",
             id_metodo_pago=metodo_id,
             version=version_subcuenta + 1,
-            whatsapp_cliente=whatsapp_subcuenta,
-            whatsapp_estado_envio=(
-                "PENDIENTE" if whatsapp_subcuenta else None
-            ),
-            whatsapp_en_confirmar=(
-                subcuenta.whatsapp_en_confirmar
-                if whatsapp_en_confirmar is None
-                else bool(whatsapp_en_confirmar)
-            ),
         )
         .execution_options(synchronize_session=False)
     )
@@ -867,6 +693,7 @@ def cobrar_subcuenta(
         )
 
     try:
+        cantidades_consumidas = {}
         asignaciones = (
             db.query(asignaciones_subcuenta, items_cuenta)
             .join(
@@ -877,30 +704,6 @@ def cobrar_subcuenta(
             .order_by(items_cuenta.agregado_en, items_cuenta.id_item_cuenta)
             .all()
         )
-        proveedores = json.loads(cuenta.proveedores_json or "[]")
-        proveedores_por_subcuenta = _prorratear_proveedores(
-            proveedores,
-            [
-                fila.total
-                for fila in db.query(subcuentas)
-                .filter(subcuentas.id_cuenta == cuenta_id)
-                .order_by(subcuentas.id_subcuenta)
-                .all()
-            ],
-        )
-        subcuentas_ordenadas = (
-            db.query(subcuentas)
-            .filter(subcuentas.id_cuenta == cuenta_id)
-            .order_by(subcuentas.id_subcuenta)
-            .all()
-        )
-        posicion = next(
-            indice
-            for indice, fila in enumerate(subcuentas_ordenadas)
-            if fila.id_subcuenta == subcuenta_id
-        )
-        proveedores_pago = proveedores_por_subcuenta[posicion]
-
         if cuenta.modo_division == "ITEMS":
             carrito = [
                 {
@@ -924,11 +727,9 @@ def cobrar_subcuenta(
                 metodo_id=metodo_id,
                 usuario_actual=usuario_actual,
                 caja_actual=caja_actual,
-                proveedores_seleccionados=proveedores_pago,
                 mesa_id=cuenta.id_mesa,
                 commit=False,
                 mesa_cuenta_abierta=True,
-                whatsapp_cliente=whatsapp_subcuenta,
             )
         else:
             if not cuenta.inventario_descontado:
@@ -950,12 +751,8 @@ def cobrar_subcuenta(
                 for inventario_id, cantidad in cantidades.items():
                     inventarios[inventario_id].cantidad -= cantidad
                 cuenta.inventario_descontado = True
+                cantidades_consumidas = cantidades
 
-            proveedor_unico = (
-                proveedores_pago[0]["id"]
-                if len(proveedores_pago) == 1
-                else None
-            )
             nueva_venta = ventas(
                 fecha_hora=fecha_pago,
                 total=float(subcuenta.total),
@@ -963,20 +760,15 @@ def cobrar_subcuenta(
                 id_usuario=getattr(usuario_actual, "id_usuario", None),
                 id_caja=caja_actual.id_caja,
                 id_estado_ventas=1,
-                id_proveedor=proveedor_unico,
-                proveedores_texto=", ".join(
-                    proveedor["nombre"] for proveedor in proveedores_pago
-                )
-                or None,
-                costo_proveedor=float(subcuenta.costo_proveedor),
                 id_mesa=cuenta.id_mesa,
-                whatsapp_cliente=whatsapp_subcuenta,
-                whatsapp_estado_envio=(
-                    "PENDIENTE" if whatsapp_subcuenta else None
-                ),
             )
             db.add(nueva_venta)
             db.flush()
+            _guardar_consumos_inventario(
+                db,
+                nueva_venta.id_venta,
+                cantidades_consumidas,
+            )
             db.add(
                 detalle_ventas(
                     cantidad=1,

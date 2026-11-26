@@ -228,13 +228,20 @@ class InformesTests(unittest.TestCase):
                         valor_domicilio=2_000,
                         estado_domicilio="CANCELADO",
                     ),
+                    ventas(
+                        fecha_hora=datetime.datetime(2026, 1, 9, 14),
+                        total=500_000,
+                        id_estado_ventas=completada.id_estado_venta,
+                        id_metodos_pagos=efectivo.id_metodos_pago,
+                        tipo_pedido="MESA",
+                    ),
                 ]
             )
             db.commit()
             with patch("views.informes.SessionLocal", return_value=db):
                 resultado = _obtener_analisis_negocio(
-                    datetime.date(2026, 1, 1),
-                    datetime.date(2026, 1, 31),
+                    datetime.date(2026, 1, 10),
+                    datetime.date(2026, 1, 10),
                 )
 
             self.assertEqual(resultado["total_ventas"], 27_000)

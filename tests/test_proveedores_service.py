@@ -127,6 +127,77 @@ class ProveedoresServiceTests(unittest.TestCase):
             0,
         )
 
+    def test_seed_expande_snacks_agrupados_a_productos_individuales(self):
+        proveedor = proveedores(
+            nombre="Comestibles Ricos",
+            que_provee="Snacks",
+            estado="ACTIVO",
+        )
+        self.db.add(proveedor)
+        self.db.flush()
+        self.db.add(
+            catalogo_proveedores(
+                id_proveedor=proveedor.id_proveedor,
+                grupo="Todo Rico",
+                nombre="Todo Rico",
+                detalles="Tradicional / Natural; BBQ; Criollo.",
+            )
+        )
+        self.db.commit()
+
+        sembrar_catalogo_proveedores(self.db)
+
+        nombres = {
+            nombre
+            for nombre, in self.db.query(catalogo_proveedores.nombre)
+            .filter(catalogo_proveedores.id_proveedor == proveedor.id_proveedor)
+            .all()
+        }
+        self.assertIn("Todo Rico Natural", nombres)
+        self.assertIn("Todo Rico BBQ", nombres)
+        self.assertIn("Todo Rico Criollo", nombres)
+        self.assertNotIn("Todo Rico", nombres)
+
+    def test_seed_mueve_costo_de_grupo_a_su_unica_variante(self):
+        proveedor = proveedores(
+            nombre="Comestibles Ricos",
+            que_provee="Snacks",
+            estado="ACTIVO",
+        )
+        self.db.add(proveedor)
+        self.db.flush()
+        self.db.add(
+            catalogo_proveedores(
+                id_proveedor=proveedor.id_proveedor,
+                grupo="Super Ricas",
+                nombre="Super Ricas",
+                detalles="Papas sabor pollo.",
+                precio_unitario=3000,
+            )
+        )
+        self.db.commit()
+        self.db.autoflush = False
+
+        sembrar_catalogo_proveedores(self.db)
+
+        self.assertIsNone(
+            self.db.query(catalogo_proveedores)
+            .filter_by(
+                id_proveedor=proveedor.id_proveedor,
+                nombre="Super Ricas",
+            )
+            .first()
+        )
+        articulo = (
+            self.db.query(catalogo_proveedores)
+            .filter_by(
+                id_proveedor=proveedor.id_proveedor,
+                nombre="Super Ricas sabor Pollo",
+            )
+            .one()
+        )
+        self.assertEqual(articulo.precio_unitario, 3000)
+
     def test_precio_de_catalogo_rechaza_valores_invalidos(self):
         sembrar_catalogo_proveedores(self.db)
         articulo = self.db.query(catalogo_proveedores).first()

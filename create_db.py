@@ -9,10 +9,11 @@ from database.models import (
 from services.auth_service import hash_password
 from services.inventario_service import (
     sincronizar_categorias_inventario,
-    sincronizar_inventario_catalogo_bebidas,
+    sincronizar_inventario_catalogo_proveedores,
 )
 from services.proveedores_service import sembrar_catalogo_proveedores
 from services.menu_catalog_service import sembrar_menu
+from services.recetas_service import sembrar_inventario_y_recetas_menu
 from database.database import SessionLocal
 from services.mesa_service import sembrar_mesas
 from sqlalchemy import text
@@ -85,48 +86,6 @@ def init_db():
             "cuentas_abiertas",
             "inventario_descontado",
             "inventario_descontado BOOLEAN NOT NULL DEFAULT 0",
-        )
-        _asegurar_columna(
-            db, "cuentas_abiertas", "whatsapp_cliente", "whatsapp_cliente VARCHAR"
-        )
-        _asegurar_columna(
-            db,
-            "cuentas_abiertas",
-            "whatsapp_estado_envio",
-            "whatsapp_estado_envio VARCHAR",
-        )
-        _asegurar_columna(
-            db,
-            "cuentas_abiertas",
-            "whatsapp_en_confirmar",
-            "whatsapp_en_confirmar BOOLEAN NOT NULL DEFAULT 0",
-        )
-        _asegurar_columna(
-            db, "subcuentas", "whatsapp_cliente", "whatsapp_cliente VARCHAR"
-        )
-        _asegurar_columna(
-            db,
-            "subcuentas",
-            "whatsapp_estado_envio",
-            "whatsapp_estado_envio VARCHAR",
-        )
-        _asegurar_columna(
-            db,
-            "subcuentas",
-            "whatsapp_en_confirmar",
-            "whatsapp_en_confirmar BOOLEAN NOT NULL DEFAULT 0",
-        )
-        _asegurar_columna(
-            db, "ventas", "whatsapp_cliente", "whatsapp_cliente VARCHAR"
-        )
-        _asegurar_columna(
-            db,
-            "ventas",
-            "whatsapp_estado_envio",
-            "whatsapp_estado_envio VARCHAR",
-        )
-        _asegurar_columna(
-            db, "ventas", "whatsapp_error", "whatsapp_error TEXT"
         )
     _hacer_correo_proveedor_opcional()
 
@@ -234,7 +193,8 @@ def init_db():
             db.add(categorias_proveedores(nombre=nombre_categoria, estado="ACTIVO"))
     db.commit()
     sembrar_catalogo_proveedores(db)
-    sincronizar_inventario_catalogo_bebidas(db)
+    sincronizar_inventario_catalogo_proveedores(db)
+    sincronizar_categorias_inventario(db)
     sembrar_mesas(db)
     db.commit()
 
@@ -374,8 +334,10 @@ def init_db():
     print(f"{len(lista_productos)} productos verificados/creados.")
     total_menu = sembrar_menu(db)
     print(f"{total_menu} productos del menú sincronizados.")
+    total_recetas = sembrar_inventario_y_recetas_menu(db)
+    print(f"{total_recetas} ingredientes de recetas sincronizados.")
 
-    # Sin datos de ejemplo: proveedores e inventario los crea el propietario desde la app.
+    # El catálogo inicial de proveedores y sus artículos se precarga con stock cero.
     # crear estados de usuario
     estados = ["ACTIVO", "INACTIVO"]
     for nombre in estados:

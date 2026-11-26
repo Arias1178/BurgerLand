@@ -11,11 +11,14 @@ formulario queda deshabilitado.
 """
 
 import datetime as dt
+import logging
 
 import flet as ft
+from sqlalchemy import or_
+from sqlalchemy.exc import SQLAlchemyError
 
 from database.database import SessionLocal
-from database.models import Debt, Payroll, Service, Transaction, rol, ventas
+from database.models import Debt, Payroll, Service, Transaction, estado_ventas, rol, ventas
 from services.financial_engine import FinancialEngine
 
 from services.contabilidad_service import (
@@ -25,6 +28,8 @@ from services.contabilidad_service import (
     can_process_accounting,
     procesar_consolidacion_contable,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _formatear_pesos(valor):
@@ -52,6 +57,8 @@ def _tarjeta_resumen(titulo, valor, color="#F2C744"):
 
 
 def _obtener_rango_periodo(periodo, hoy):
+    if periodo == "hoy":
+        return hoy, hoy
     if periodo == "este_mes":
         return hoy.replace(day=1), hoy
     if periodo == "mes_anterior":
@@ -84,15 +91,16 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
         db_usuario.close()
     es_administrador = rol_usuario is not None and rol_usuario.nombre == "ADMIN"
     estado_periodo = {
-        "inicio": hoy.replace(day=1),
+        "inicio": hoy,
         "fin": hoy,
         "fecha_transaccion": hoy,
     }
     periodo_field = ft.Dropdown(
         label="Periodo del cálculo",
         width=230,
-        value="este_mes",
+        value="hoy",
         options=[
+            ft.dropdown.Option("hoy", "Hoy"),
             ft.dropdown.Option("este_mes", "Este mes"),
             ft.dropdown.Option("mes_anterior", "Mes anterior"),
             ft.dropdown.Option("ultimos_30_dias", "Últimos 30 días"),
@@ -202,6 +210,47 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
     periodo_field.on_change = cambiar_periodo
     actualizar_texto_rango()
 
+    def marcar_pendiente_pagado(item):
+        if not es_administrador:
+            mensaje.value = "Solo un administrador puede actualizar pagos."
+            mensaje.color = "#FF7B7B"
+            page.update()
+            return
+
+        modelos = {
+            "transaccion": Transaction,
+            "servicio": Service,
+            "deuda": Debt,
+        }
+        modelo = modelos.get(item.origen)
+        if modelo is None or item.registro_id is None:
+            mensaje.value = "No se pudo identificar el pendiente para actualizarlo."
+            mensaje.color = "#FF7B7B"
+            page.update()
+            return
+
+        db = SessionLocal()
+        try:
+            registro = db.get(modelo, item.registro_id)
+            if registro is None:
+                mensaje.value = "El pendiente ya no existe."
+                mensaje.color = "#FF7B7B"
+                page.update()
+                return
+            registro.pagado = True
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+            logger.exception("No se pudo marcar como pagado un pendiente contable")
+            mensaje.value = "No se pudo actualizar el estado del pendiente."
+            mensaje.color = "#FF7B7B"
+            page.update()
+            return
+        finally:
+            db.close()
+
+        cargar_datos()
+
     def cargar_datos():
         inicio = estado_periodo["inicio"]
         fin = estado_periodo["fin"]
@@ -215,12 +264,23 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
 
         db = SessionLocal()
         try:
+            ventas_query = db.query(ventas)
+            estado_anulado = db.query(estado_ventas).filter(
+                estado_ventas.nombre == "ANULADA"
+            ).first()
+            if estado_anulado is not None:
+                ventas_query = ventas_query.filter(
+                    or_(
+                        ventas.id_estado_ventas.is_(None),
+                        ventas.id_estado_ventas != estado_anulado.id_estado_venta,
+                    )
+                )
             engine = FinancialEngine(
                 transactions=db.query(Transaction).all(),
                 payroll=db.query(Payroll).all(),
                 debts=db.query(Debt).all(),
                 services=db.query(Service).all(),
-                sales=db.query(ventas).all(),
+                sales=ventas_query.all(),
             )
             pnl = engine.calculate_pnl(inicio, fin)
             cash = engine.calculate_cash_flow(inicio, fin)
@@ -231,6 +291,50 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
                 break_even_text = "Sin datos suficientes"
         finally:
             db.close()
+
+        pendientes = []
+        for item in cash.detalle_pendientes:
+            controles = [
+                ft.Text(
+                    f"{item.tipo} · {item.concepto}"
+                    + (
+                        f" · {item.fecha.strftime('%d/%m/%Y')}"
+                        if item.fecha
+                        else ""
+                    ),
+                    color="#C9CEDB",
+                    size=12,
+                ),
+                ft.Text(
+                    _formatear_pesos(item.monto),
+                    color="#7ABAFB" if item.tipo == "Por cobrar" else "#FFB86C",
+                    size=12,
+                    weight="bold",
+                ),
+            ]
+            if es_administrador:
+                controles.append(
+                    ft.TextButton(
+                        "Marcar cobrado"
+                        if item.tipo == "Por cobrar"
+                        else "Marcar pagado",
+                        on_click=lambda _evento, pendiente=item: (
+                            marcar_pendiente_pagado(pendiente)
+                        ),
+                    )
+                )
+            pendientes.append(
+                ft.Container(
+                    padding=10,
+                    bgcolor="#1B202B",
+                    border_radius=10,
+                    content=ft.Row(
+                        wrap=True,
+                        alignment="spaceBetween",
+                        controls=controles,
+                    ),
+                )
+            )
 
         resultados.controls = [
             ft.Text("Resultados financieros", size=18, weight="bold", color="white"),
@@ -263,41 +367,7 @@ def _panel_financiero(page: ft.Page, usuario_actual=None):
             ),
             ft.Column(
                 spacing=6,
-                controls=[
-                    ft.Container(
-                        padding=10,
-                        bgcolor="#1B202B",
-                        border_radius=10,
-                        content=ft.Row(
-                            wrap=True,
-                            alignment="spaceBetween",
-                            controls=[
-                                ft.Text(
-                                    f"{item.tipo} · {item.concepto}"
-                                    + (
-                                        f" · {item.fecha.strftime('%d/%m/%Y')}"
-                                        if item.fecha
-                                        else ""
-                                    ),
-                                    color="#C9CEDB",
-                                    size=12,
-                                ),
-                                ft.Text(
-                                    _formatear_pesos(item.monto),
-                                    color=(
-                                        "#7ABAFB"
-                                        if item.tipo == "Por cobrar"
-                                        else "#FFB86C"
-                                    ),
-                                    size=12,
-                                    weight="bold",
-                                ),
-                            ],
-                        ),
-                    )
-                    for item in cash.detalle_pendientes
-                ]
-                or [
+                controls=pendientes or [
                     ft.Text(
                         "No hay transacciones, servicios ni cuotas pendientes.",
                         color="#9AA0B4",

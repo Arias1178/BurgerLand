@@ -30,7 +30,6 @@ from services.cuenta_service import (
     listar_cuentas_abiertas,
     listar_subcuentas,
 )
-from services.whatsapp_service import actualizar_estado_envio_venta
 
 
 class CuentaServiceTests(unittest.TestCase):
@@ -136,52 +135,6 @@ class CuentaServiceTests(unittest.TestCase):
         self.assertEqual(self.db.query(detalle_ventas).filter_by(id_venta=venta.id_venta).count(), 1)
         self.assertEqual(self.db.query(movimiento_caja).count(), 1)
 
-    def test_numero_y_opcion_autoenvio_se_conservan_en_venta_cobrada(self):
-        cuenta = guardar_cuenta_abierta(
-            self.db,
-            self.carrito,
-            self.mesa.id_mesa,
-            usuario_id=1,
-            whatsapp_cliente="3001234567",
-            whatsapp_en_confirmar=True,
-        )
-
-        venta = cobrar_cuenta_abierta(
-            self.db,
-            cuenta.id_cuenta,
-            cuenta.version,
-            self.metodo.id_metodos_pago,
-            usuario_actual=None,
-            caja_actual=type("CajaPrueba", (), {"id_caja": 1})(),
-        )
-
-        self.assertEqual(venta.whatsapp_cliente, "+573001234567")
-        self.assertEqual(venta.whatsapp_estado_envio, "PENDIENTE")
-        cuenta_actual = self.db.get(cuentas_abiertas, cuenta.id_cuenta)
-        self.assertTrue(cuenta_actual.whatsapp_en_confirmar)
-
-    def test_estado_y_error_de_whatsapp_se_guardan_en_la_venta(self):
-        cuenta = self.crear_cuenta()
-        venta = cobrar_cuenta_abierta(
-            self.db,
-            cuenta.id_cuenta,
-            cuenta.version,
-            self.metodo.id_metodos_pago,
-            usuario_actual=None,
-            caja_actual=type("CajaPrueba", (), {"id_caja": 1})(),
-        )
-
-        actualizar_estado_envio_venta(
-            self.db,
-            venta.id_venta,
-            "ERROR",
-            "Token no configurado",
-        )
-
-        venta_actualizada = self.db.get(ventas, venta.id_venta)
-        self.assertEqual(venta_actualizada.whatsapp_estado_envio, "ERROR")
-        self.assertEqual(venta_actualizada.whatsapp_error, "Token no configurado")
-
     def test_dividir_en_partes_iguales_asigna_residuo_a_la_ultima(self):
         self.carrito[0]["precio"] = 10001
         cuenta = self.crear_cuenta()
@@ -241,16 +194,11 @@ class CuentaServiceTests(unittest.TestCase):
                 [20001, -1],
             )
 
-    def test_cobros_parciales_prorratean_costo_de_proveedores_sin_duplicarlo(self):
-        proveedores = [
-            {"id": 8, "nombre": "Proveedor A", "costo": 1000},
-            {"id": 9, "nombre": "Proveedor B", "costo": 500},
-        ]
+    def test_cobros_parciales_no_asocian_proveedores_a_ventas(self):
         cuenta = guardar_cuenta_abierta(
             self.db,
             self.carrito,
             self.mesa.id_mesa,
-            proveedores_seleccionados=proveedores,
             usuario_id=1,
         )
         subcuentas_creadas = dividir_cuenta_en_partes_iguales(
@@ -275,10 +223,13 @@ class CuentaServiceTests(unittest.TestCase):
             )
             version_cuenta += 1
 
-        costo_total_ventas = sum(
-            venta.costo_proveedor for venta in self.db.query(ventas).all()
+        ventas_creadas = self.db.query(ventas).all()
+        self.assertEqual(len(ventas_creadas), 3)
+        self.assertTrue(all(venta.id_proveedor is None for venta in ventas_creadas))
+        self.assertTrue(
+            all(venta.proveedores_texto is None for venta in ventas_creadas)
         )
-        self.assertEqual(costo_total_ventas, 1500)
+        self.assertTrue(all(venta.costo_proveedor == 0 for venta in ventas_creadas))
 
     def test_pagar_subcuentas_iguales_descuenta_inventario_una_vez_y_libera_al_final(self):
         insumo = inventario(
@@ -364,11 +315,9 @@ class CuentaServiceTests(unittest.TestCase):
             self.metodo.id_metodos_pago,
             None,
             type("CajaPrueba", (), {"id_caja": 1})(),
-            whatsapp_cliente="3001234567",
         )
 
         self.assertEqual(primera_venta.total, 10000)
-        self.assertEqual(primera_venta.whatsapp_cliente, "+573001234567")
         self.assertFalse(cuenta_cerrada)
         self.assertEqual(self.db.get(mesas, self.mesa.id_mesa).estado, "OCUPADA")
 
@@ -456,7 +405,6 @@ class CuentaServiceTests(unittest.TestCase):
     def test_cobrar_guarda_cambios_del_carrito_antes_de_cerrar(self):
         cuenta = self.crear_cuenta()
         carrito_actualizado = [dict(self.carrito[0], cantidad=3, precio=12000)]
-        proveedores = [{"id": 9, "nombre": "Proveedor", "costo": 500}]
 
         venta = cobrar_cuenta_abierta(
             self.db,
@@ -466,13 +414,14 @@ class CuentaServiceTests(unittest.TestCase):
             usuario_actual=None,
             caja_actual=type("CajaPrueba", (), {"id_caja": 1})(),
             carrito=carrito_actualizado,
-            proveedores_seleccionados=proveedores,
         )
 
         cuenta_pagada = self.db.get(cuentas_abiertas, cuenta.id_cuenta)
         self.assertEqual(venta.total, 36000)
         self.assertEqual(cuenta_pagada.total, 36000)
-        self.assertEqual(cuenta_pagada.proveedores_json, '[{"id": 9, "nombre": "Proveedor", "costo": 500}]')
+        self.assertIsNone(venta.id_proveedor)
+        self.assertIsNone(venta.proveedores_texto)
+        self.assertEqual(venta.costo_proveedor, 0)
         self.assertEqual(self.db.query(items_cuenta).filter_by(id_cuenta=cuenta.id_cuenta).one().cantidad, 3)
 
     def test_guardar_cuenta_mueve_mesa_y_actualiza_estados(self):

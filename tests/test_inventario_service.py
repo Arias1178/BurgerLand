@@ -8,9 +8,10 @@ from database.database import Base
 from database.models import catalogo_proveedores, categorias, inventario, productos, proveedores
 from services.inventario_service import (
     buscar_inventario_para_producto,
-    sincronizar_inventario_catalogo_bebidas,
+    sincronizar_inventario_catalogo_proveedores,
     vincular_producto_menu,
 )
+from services.proveedores_service import sembrar_catalogo_proveedores
 
 
 class InventarioServiceTests(unittest.TestCase):
@@ -140,9 +141,9 @@ class InventarioServiceTests(unittest.TestCase):
         )
         self.db.commit()
 
-        self.assertEqual(sincronizar_inventario_catalogo_bebidas(self.db), 2)
+        self.assertEqual(sincronizar_inventario_catalogo_proveedores(self.db), 2)
         self.db.commit()
-        self.assertEqual(sincronizar_inventario_catalogo_bebidas(self.db), 0)
+        self.assertEqual(sincronizar_inventario_catalogo_proveedores(self.db), 0)
         items = (
             self.db.query(inventario)
             .filter(inventario.nombre == "Águila Original - Vidrio")
@@ -155,6 +156,30 @@ class InventarioServiceTests(unittest.TestCase):
         self.assertTrue(all(item.cantidad == 0 for item in items))
         self.assertTrue(all(item.costo_unitario == 0 for item in items))
         self.assertTrue(all(not vincular_producto_menu(self.db, item) for item in items))
+
+    def test_sincroniza_snacks_y_separa_las_variantes_del_catalogo(self):
+        sembrar_catalogo_proveedores(self.db)
+
+        creados = sincronizar_inventario_catalogo_proveedores(self.db)
+        self.db.commit()
+
+        todo_rico = (
+            self.db.query(inventario)
+            .filter(inventario.nombre == "Todo Rico BBQ")
+            .one()
+        )
+        self.assertEqual(todo_rico.categoria, "Snacks")
+        self.assertEqual(todo_rico.cantidad, 0)
+        self.assertEqual(todo_rico.costo_unitario, 0)
+        self.assertIsNotNone(todo_rico.id_proveedor)
+        self.assertEqual(
+            self.db.query(inventario)
+            .filter(inventario.nombre == "Todo Rico")
+            .count(),
+            0,
+        )
+        self.assertGreater(creados, 0)
+        self.assertEqual(sincronizar_inventario_catalogo_proveedores(self.db), 0)
 
 
 if __name__ == "__main__":

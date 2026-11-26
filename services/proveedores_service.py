@@ -79,10 +79,19 @@ CATALOGO_INICIAL = (
         "PepsiCo (Frito-Lay / Alimentos Margarita)",
         "Snacks y galletas",
         (
-            ("Papas Margarita", "Natural (empaque azul); Pollo (rojo); Limón (verde); Onduladas (azul claro / blanco)."),
-            ("De Todito", "Natural (empaque azul); BBQ (rojo); Limón (verde)."),
-            ("Snacks de maíz y queso", "Doritos (rojo); Cheetos (naranja); Cheestris (palitos de queso, naranja); Choclitos (verde)."),
-            ("NatuChips", "Plátano verde (empaque verde oscuro); plátano maduro (amarillento)."),
+            ("Papas Margarita", "Margarita Natural", "Sabor natural; empaque azul."),
+            ("Papas Margarita", "Margarita sabor Pollo", "Sabor pollo; empaque rojo."),
+            ("Papas Margarita", "Margarita Limón", "Sabor limón; empaque verde."),
+            ("Papas Margarita", "Margarita Onduladas", "Presentación ondulada."),
+            ("De Todito", "De Todito Natural", "Sabor natural."),
+            ("De Todito", "De Todito BBQ", "Sabor BBQ."),
+            ("De Todito", "De Todito Limón", "Sabor limón."),
+            ("Snacks de maíz y queso", "Doritos", "Snack de maíz."),
+            ("Snacks de maíz y queso", "Cheetos", "Snack de maíz y queso."),
+            ("Snacks de maíz y queso", "Cheestris", "Palitos sabor a queso."),
+            ("Snacks de maíz y queso", "Choclitos", "Snack de maíz."),
+            ("NatuChips", "NatuChips Plátano Verde", "Plátano verde; empaque verde oscuro."),
+            ("NatuChips", "NatuChips Plátano Maduro", "Plátano maduro."),
             ("Galletas Quaker", "Empaque pequeño de avena."),
         ),
     ),
@@ -90,11 +99,15 @@ CATALOGO_INICIAL = (
         "Comestibles Ricos",
         "Snacks",
         (
-            ("Super Ricas", "Papas fritas sabor a pollo (empaque rojo)."),
-            ("Todo Rico", "Tradicional / Natural (empaque azul); BBQ (rojo); Criollo (naranja)."),
+            ("Super Ricas", "Super Ricas sabor Pollo", "Papas fritas sabor a pollo; empaque rojo."),
+            ("Todo Rico", "Todo Rico Natural", "Sabor natural."),
+            ("Todo Rico", "Todo Rico BBQ", "Sabor BBQ."),
+            ("Todo Rico", "Todo Rico Criollo", "Sabor criollo."),
             ("Chicharrones Super Ricas", "Empaque rojo."),
-            ("Tajamiel", "Plátano maduro (empaque rojo); plátano verde (verde)."),
-            ("Tostacos", "Picantes (empaque rojo); queso (amarillo)."),
+            ("Tajamiel", "Tajamiel Plátano Maduro", "Plátano maduro; empaque rojo."),
+            ("Tajamiel", "Tajamiel Plátano Verde", "Plátano verde."),
+            ("Tostacos", "Tostacos Picantes", "Sabor picante; empaque rojo."),
+            ("Tostacos", "Tostacos Queso", "Sabor queso; empaque amarillo."),
         ),
     ),
     (
@@ -168,15 +181,16 @@ CATALOGO_INICIAL = (
         "Galletas y confitería",
         (
             ("Club Social Original", "Galletas saladas; empaque azul."),
-            ("Trident Canela o Fresa", "Gomas de mascar; caja roja."),
+            ("Trident", "Trident Canela", "Goma de mascar sabor canela."),
+            ("Trident", "Trident Fresa", "Goma de mascar sabor fresa."),
             ("Trident Menta", "Gomas de mascar; caja azul."),
             ("Trident Hierbabuena", "Gomas de mascar; caja verde."),
             ("Chiclets Adams", "Mini empaques amarillos / naranjas."),
-            ("Halls Cereza / Frutos Rojos", "Empaque morado / rojo."),
-            ("Halls Mentolado Fuerte", "Empaque azul."),
-            ("Halls Menta / Eucalipto", "Empaque verde."),
-            ("Halls surtidos en pote", "Variedades de menta, cereza, frutos rojos y mentol."),
-            ("Halls en exhibidor acrílico", "Mentol / menta fuerte (azul); cereza / frutos rojos (rojo / morado); eucalipto / menta suave (verde)."),
+            ("Halls", "Halls Cereza", "Caramelo sabor cereza."),
+            ("Halls", "Halls Frutos Rojos", "Caramelo sabor frutos rojos."),
+            ("Halls", "Halls Mentolado Fuerte", "Caramelo mentolado; empaque azul."),
+            ("Halls", "Halls Menta", "Caramelo sabor menta."),
+            ("Halls", "Halls Eucalipto", "Caramelo sabor eucalipto."),
             ("Oreo", "Galleta; empaque azul clásico."),
             ("Ritz", "Galletas saladas."),
         ),
@@ -197,7 +211,8 @@ CATALOGO_INICIAL = (
             ("Barra Jumbo", "Barra de chocolate con maní."),
             ("Chocolatina Gol", "Barra cubierta de chocolate y arroz soplado; empaque morado."),
             ("Maní La Especial Salado", "Empaque rojo."),
-            ("Maní La Especial Crocante / Tipo Moto", "Empaque café / dorado."),
+            ("Maní La Especial", "Maní La Especial Crocante", "Maní crocante; empaque café / dorado."),
+            ("Maní La Especial", "Maní La Especial Tipo Moto", "Presentación tipo moto."),
             ("Galletas Tosh", "Galletas saludables; empaque verde."),
         ),
     ),
@@ -209,6 +224,59 @@ CATALOGO_INICIAL = (
         ),
     ),
 )
+
+CATALOGO_ARTICULOS_AGRUPADOS_OBSOLETOS = {
+    "PepsiCo (Frito-Lay / Alimentos Margarita)": {
+        "Papas Margarita",
+        "De Todito",
+        "Snacks de maíz y queso",
+        "NatuChips",
+    },
+    "Comestibles Ricos": {
+        "Super Ricas",
+        "Todo Rico",
+        "Tajamiel",
+        "Tostacos",
+    },
+    "Mondelez International": {
+        "Trident Canela o Fresa",
+        "Halls Cereza / Frutos Rojos",
+        "Halls Menta / Eucalipto",
+        "Halls surtidos en pote",
+        "Halls en exhibidor acrílico",
+    },
+    "Grupo Nutresa (Noel / Nacional de Chocolates / La Especial)": {
+        "Maní La Especial Crocante / Tipo Moto",
+    },
+}
+
+CATALOGO_ARTICULOS_REEMPLAZO_UNICO = {
+    "Comestibles Ricos": {
+        "Super Ricas": "Super Ricas sabor Pollo",
+    },
+}
+
+CATEGORIAS_POR_SUMINISTRO = {
+    "bebidas": ("Bebidas", "Bebidas Frías"),
+    "snacks": ("Snacks", "Snacks"),
+    "snacks y galletas": ("Snacks", "Snacks"),
+    "galletas y confitería": ("Galletas y Confitería", "Galletas y Confitería"),
+    "galletas, chocolates y frutos secos": (
+        "Galletas y Confitería",
+        "Galletas y Confitería",
+    ),
+    "ponqués y pasteles": ("Ponqués y Pasteles", "Ponqués y Pasteles"),
+    "licores": ("Licores", "Licores"),
+    "cigarrillos": ("Cigarrillos", "Cigarrillos"),
+}
+
+
+def categorias_para_suministro(nombre_categoria):
+    return CATEGORIAS_POR_SUMINISTRO.get(
+        (nombre_categoria or "").strip().casefold(),
+        ("Otros", "Otros"),
+    )
+
 
 CATALOGO_BEBIDAS_AGRUPADAS_ANTERIOR = {
     "Postobón": {
@@ -294,6 +362,8 @@ def sembrar_catalogo_proveedores(db: Session) -> int:
             articulos_existentes.add(nombre.casefold())
             nuevos_articulos += 1
 
+    db.flush()
+
     for nombre_proveedor, nombres_articulos in CATALOGO_BEBIDAS_AGRUPADAS_ANTERIOR.items():
         proveedor = proveedores_existentes.get(nombre_proveedor.casefold())
         if proveedor is None:
@@ -302,6 +372,39 @@ def sembrar_catalogo_proveedores(db: Session) -> int:
             catalogo_proveedores.id_proveedor == proveedor.id_proveedor,
             catalogo_proveedores.nombre.in_(nombres_articulos),
         ).delete(synchronize_session=False)
+
+    for nombre_proveedor, nombres_articulos in CATALOGO_ARTICULOS_AGRUPADOS_OBSOLETOS.items():
+        proveedor = proveedores_existentes.get(nombre_proveedor.casefold())
+        if proveedor is None:
+            continue
+        reemplazos = CATALOGO_ARTICULOS_REEMPLAZO_UNICO.get(
+            nombre_proveedor,
+            {},
+        )
+        for nombre_antiguo, nombre_nuevo in reemplazos.items():
+            articulo_antiguo = db.query(catalogo_proveedores).filter(
+                catalogo_proveedores.id_proveedor == proveedor.id_proveedor,
+                catalogo_proveedores.nombre == nombre_antiguo,
+            ).first()
+            articulo_nuevo = db.query(catalogo_proveedores).filter(
+                catalogo_proveedores.id_proveedor == proveedor.id_proveedor,
+                catalogo_proveedores.nombre == nombre_nuevo,
+            ).first()
+            if (
+                articulo_antiguo
+                and articulo_antiguo.precio_unitario is not None
+                and articulo_nuevo
+                and articulo_nuevo.precio_unitario is None
+            ):
+                articulo_nuevo.precio_unitario = articulo_antiguo.precio_unitario
+                db.delete(articulo_antiguo)
+
+        articulos_obsoletos = db.query(catalogo_proveedores).filter(
+            catalogo_proveedores.id_proveedor == proveedor.id_proveedor,
+            catalogo_proveedores.nombre.in_(nombres_articulos),
+            catalogo_proveedores.precio_unitario.is_(None),
+        )
+        articulos_obsoletos.delete(synchronize_session=False)
 
     db.commit()
     return nuevos_articulos

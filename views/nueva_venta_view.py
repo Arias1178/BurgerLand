@@ -1,7 +1,5 @@
-import asyncio
 import datetime
-import json
-import os
+import logging
 from collections.abc import Callable
 
 import flet as ft
@@ -13,7 +11,6 @@ from database.models import (
     estados_productos,
     metodos_pago,
     mesas,
-    proveedores,
 )
 from services.mesa_service import (
     ESTADO_MESA_LIBRE,
@@ -23,9 +20,6 @@ from services.mesa_service import (
 )
 from services.venta_service import validar_stock_disponible
 from services.cuenta_service import (
-    actualizar_contacto_subcuenta,
-    actualizar_estado_whatsapp_cuenta,
-    actualizar_estado_whatsapp_subcuenta,
     cobrar_cuenta_abierta,
     cobrar_subcuenta,
     dividir_cuenta_en_partes_iguales,
@@ -37,20 +31,12 @@ from services.cuenta_service import (
     obtener_cuenta_abierta,
     obtener_items_cuenta,
 )
-from services.whatsapp_service import (
-    ESTADO_ERROR,
-    ESTADO_ENVIADO,
-    ESTADO_PENDIENTE,
-    actualizar_estado_envio_venta,
-    enviar_comprobante,
-    generar_comprobante_pdf,
-    generar_mensaje_comprobante,
-    validar_numero_colombiano,
-)
 from services.inventario_service import (
     buscar_inventario_para_producto,
     extraer_variantes_producto,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def tarjeta_mesa(
@@ -249,7 +235,6 @@ def nueva_venta_view(
         None,
     )
     lista_metodos = db.query(metodos_pago).all()
-    lista_proveedores = db.query(proveedores).filter(proveedores.estado == "ACTIVO").order_by(proveedores.nombre.asc()).all()
     estado_activo = db.query(estados_productos).filter(estados_productos.nombre == "ACTIVO").first()
     lista_mesas = obtener_mesas(db)
     cuentas_por_mesa = {
@@ -373,11 +358,6 @@ def nueva_venta_view(
         "id": lista_metodos[0].id_metodos_pago if lista_metodos else None,
         "nombre": lista_metodos[0].nombre if lista_metodos else "",
     }
-    proveedores_seleccionados = []
-    if cuenta_cargada:
-        proveedores_seleccionados = json.loads(
-            cuenta_cargada.proveedores_json or "[]"
-        )
     pestaña_actual = {"indice": 0}
     busqueda = {"texto": ""}
 
@@ -385,19 +365,6 @@ def nueva_venta_view(
     subcuentas_column = ft.Column(spacing=10, scroll="auto")
     total_text = ft.Text("Total: $0", size=20, weight="bold", color="white")
     metodo_text = ft.Text(f"Método: {metodo_seleccionado['nombre']}", color="white")
-    whatsapp_field = ft.TextField(
-        label="Celular del cliente",
-        hint_text="3001234567",
-        value=(
-            cuenta_cargada.whatsapp_cliente.removeprefix("+57")
-            if cuenta_cargada and cuenta_cargada.whatsapp_cliente
-            else ""
-        ),
-        keyboard_type=ft.KeyboardType.PHONE,
-        max_length=10,
-        width=220,
-        height=56,
-    )
     cliente_domicilio_field = ft.TextField(label="Cliente", expand=True)
     telefono_domicilio_field = ft.TextField(
         label="Teléfono",
@@ -441,40 +408,7 @@ def nueva_venta_view(
             ),
         ],
     )
-    whatsapp_auto_checkbox = ft.Checkbox(
-        label="Enviar el comprobante al confirmar el pago",
-        value=bool(cuenta_cargada and cuenta_cargada.whatsapp_en_confirmar),
-    )
-    whatsapp_status_text = ft.Text("", color="#C9CEDB", size=12)
-    btn_whatsapp = ft.Button(
-        "Enviar precuenta por WhatsApp",
-        bgcolor="#2E7D5B",
-        color="white",
-    )
-    whatsapp_header = ft.Text(
-        "COMPROBANTE POR WHATSAPP",
-        color="white",
-        weight="bold",
-    )
-    whatsapp_phone_row = ft.Row(
-        spacing=8,
-        vertical_alignment="center",
-        controls=[
-            ft.Text("+57", color="#C9CEDB", weight="bold"),
-            whatsapp_field,
-        ],
-        wrap=False,
-    )
-    whatsapp_help_text = ft.Text(
-        "Ingresa 10 dígitos; el prefijo +57 se agrega automáticamente.",
-        color="#C9CEDB",
-        size=12,
-    )
-    etiqueta_negocio = os.environ.get("BUSINESS_NAME", "BurgerLand").strip() or "BurgerLand"
-    proveedor_text = ft.Text("Proveedores: Sin selección", color="white")
-    proveedor_costo_text = ft.Text("Cobro de proveedores: $0", color="#F2C744")
     mensaje_venta_text = ft.Text("", color="#FF7B7B", size=12)
-    proveedores_column = ft.Column(spacing=6, expand=True, scroll="auto")
     contenedor_menu = ft.Container(expand=True)
     mesa_text = ft.Text("", color="#C9CEDB")
     encabezado_venta = ft.Text("", size=22, weight="bold", color="white")
@@ -540,17 +474,13 @@ def nueva_venta_view(
         mesa_id_nueva = mesa.id_mesa if mesa else None
         if cuenta_abierta["id"] is not None:
             try:
-                numero = numero_whatsapp_actual()
                 cuenta = guardar_cuenta_abierta(
                     db=db,
                     carrito=carrito,
                     mesa_id=mesa_id_nueva,
-                    proveedores_seleccionados=proveedores_seleccionados,
                     usuario_id=getattr(usuario_actual, "id_usuario", None),
                     cuenta_id=cuenta_abierta["id"],
                     version=cuenta_abierta["version"],
-                    whatsapp_cliente=numero,
-                    whatsapp_en_confirmar=whatsapp_auto_checkbox.value,
                 )
             except ValueError as error:
                 mensaje_venta_text.value = str(error)
@@ -722,7 +652,6 @@ def nueva_venta_view(
         volver = on_volver_a_mesas or on_venta_completada
         tiene_cambios_sin_guardar = bool(
             carrito
-            or proveedores_seleccionados
             or cliente_domicilio_field.value
             or telefono_domicilio_field.value
             or direccion_domicilio_field.value
@@ -1013,29 +942,35 @@ def nueva_venta_view(
         page.show_dialog(dialog)
 
     def construir_tarjeta_producto(producto):
+        descripcion = (producto.descripcion or "").strip()
+        contenido = [
+            ft.Text(producto.nombre, size=14, weight="bold", color="white"),
+            ft.Text(
+                f"${producto.precio:,.0f}".replace(",", "."),
+                size=14,
+                color="#F2C744",
+                weight="bold",
+            ),
+        ]
+        if descripcion:
+            contenido.append(
+                ft.Text(
+                    descripcion,
+                    size=11,
+                    color="#C7C9D9",
+                    max_lines=3,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                )
+            )
         return ft.Button(
             content=ft.Column(
+                tight=True,
                 spacing=4,
-                controls=[
-                    ft.Text(producto.nombre, size=14, weight="bold", color="white"),
-                    ft.Text(
-                        f"${producto.precio:,.0f}".replace(",", "."),
-                        size=14,
-                        color="#F2C744",
-                        weight="bold",
-                    ),
-                    ft.Text(
-                        producto.descripcion or "",
-                        size=11,
-                        color="#C7C9D9",
-                        max_lines=3,
-                        overflow=ft.TextOverflow.ELLIPSIS,
-                    ),
-                ],
+                controls=contenido,
             ),
             bgcolor="#3A3F52",
             width=220,
-            height=125,
+            height=125 if descripcion else 90,
             on_click=lambda e, p=producto: abrir_selector_cantidad(p),
         )
 
@@ -1086,85 +1021,52 @@ def nueva_venta_view(
             ),
         )
 
-    def construir_tarjeta_proveedor(proveedor):
-        seleccionado = any(p["id"] == proveedor.id_proveedor for p in proveedores_seleccionados)
-        return ft.Button(
-            content=ft.Column(
-                spacing=4,
-                controls=[
-                    ft.Text(proveedor.nombre, size=14, weight="bold", color="white"),
-                    ft.Text(
-                        f"${float(proveedor.cuanto_cobra or 0):,.0f}".replace(",", "."),
-                        size=14,
-                        color="#F2C744",
-                        weight="bold",
-                    ),
-                ],
-            ),
-            bgcolor="#4A6741" if seleccionado else "#3A3F52",
-            width=220,
-            height=70,
-            on_click=lambda e, p=proveedor: seleccionar_proveedor(p),
-        )
-
-    def construir_grid_proveedores():
-        if not lista_proveedores:
-            return ft.Container(
-                alignment=ft.Alignment(0, 0),
-                padding=20,
-                content=ft.Text("No hay proveedores activos registrados.", color="white"),
-            )
-
-        return ft.Container(
-            expand=True,
-            padding=15,
-            content=ft.Column(
-                expand=True,
-                scroll="auto",
-                controls=[
-                    ft.Row(
-                        wrap=True,
-                        spacing=10,
-                        run_spacing=10,
-                        controls=[construir_tarjeta_proveedor(p) for p in lista_proveedores],
-                    )
-                ],
-            ),
-        )
-
     def construir_tabs():
-        if not lista_categorias and not lista_proveedores:
+        categorias_menu = [
+            categoria for categoria in lista_categorias
+            if categoria.nombre != "Combos"
+        ]
+        if not categorias_menu:
             return ft.Text("No hay productos registrados.", color="white")
 
-        tabs = []
-        contenidos = []
+        indice_seleccionado = min(
+            pestaña_actual["indice"],
+            len(categorias_menu) - 1,
+        )
+        pestaña_actual["indice"] = indice_seleccionado
         candidatos = productos_visibles()
-
-        for cat in lista_categorias:
-            if cat.nombre == "Combos":
-                continue
-            tabs.append(ft.Tab(label=ft.Text(cat.nombre, color="white")))
-            contenidos.append(
-                construir_grid_productos([p for p in candidatos if p.id_categoria == cat.id_categoria])
-            )
-
-        tabs.append(ft.Tab(label=ft.Text("Proveedores", color="white")))
-        contenidos.append(construir_grid_proveedores())
-
-        return ft.Tabs(
-            length=len(tabs),
-            selected_index=pestaña_actual["indice"],
-            on_change=lambda e: pestaña_actual.__setitem__(
-                "indice", getattr(e.control, "selected_index", 0)
-            ),
+        selector_categorias = ft.Row(
+            height=48,
+            scroll=ft.ScrollMode.AUTO,
+            spacing=0,
+            controls=[
+                ft.Container(
+                    bgcolor="#454B60" if indice == indice_seleccionado else None,
+                    padding=ft.Padding.symmetric(horizontal=16, vertical=12),
+                    content=ft.Text(
+                        categoria.nombre,
+                        color="white",
+                        weight="bold" if indice == indice_seleccionado else "normal",
+                    ),
+                    on_click=lambda _e, indice=indice: seleccionar_categoria(indice),
+                )
+                for indice, categoria in enumerate(categorias_menu)
+            ],
+        )
+        productos_categoria = [
+            producto for producto in candidatos
+            if producto.id_categoria
+            == categorias_menu[indice_seleccionado].id_categoria
+        ]
+        return ft.Column(
             expand=True,
-            content=ft.Column(
-                expand=True,
-                controls=[
-                    ft.TabBar(tabs=tabs, scrollable=True),
-                    ft.TabBarView(expand=True, controls=contenidos),
-                ],
-            ),
+            controls=[
+                selector_categorias,
+                ft.Container(
+                    expand=True,
+                    content=construir_grid_productos(productos_categoria),
+                ),
+            ],
         )
 
     def refrescar_menu():
@@ -1183,51 +1085,9 @@ def nueva_venta_view(
         contenedor_menu.content = contenido
         page.update()
 
-    def actualizar_proveedores_resumen():
-        total_proveedores = sum(item["costo"] for item in proveedores_seleccionados)
-        if proveedores_seleccionados:
-            nombres = ", ".join(item["nombre"] for item in proveedores_seleccionados)
-            proveedor_text.value = f"Proveedores: {nombres}"
-        else:
-            proveedor_text.value = "Proveedores: Sin selección"
-        proveedor_costo_text.value = f"Cobro de proveedores: ${total_proveedores:,.0f}".replace(",", ".")
-
-        proveedores_column.controls.clear()
-        for item in proveedores_seleccionados:
-            proveedores_column.controls.append(
-                ft.Row(
-                    spacing=8,
-                    vertical_alignment="center",
-                    controls=[
-                        ft.Text(item["nombre"], color="white", size=12),
-                        ft.Text(
-                            f"${item['costo']:,.0f}".replace(",", "."),
-                            color="#F2C744",
-                            size=12,
-                            weight="bold",
-                        ),
-                        ft.Container(
-                            width=28,
-                            height=28,
-                            bgcolor="#8A3A3A",
-                            border_radius=14,
-                            alignment=ft.Alignment(0, 0),
-                            content=ft.Text("X", color="white", weight="bold", text_align="center"),
-                            on_click=lambda e, id_proveedor=item["id"]: quitar_proveedor(id_proveedor),
-                        ),
-                    ],
-                )
-            )
-
-    def numero_whatsapp_actual() -> str | None:
-        valor = (whatsapp_field.value or "").strip()
-        if not valor:
-            if whatsapp_auto_checkbox.value:
-                raise ValueError(
-                    "Ingresa un celular válido para enviar el comprobante al pagar."
-                )
-            return None
-        return validar_numero_colombiano(valor)
+    def seleccionar_categoria(indice):
+        pestaña_actual["indice"] = indice
+        refrescar_menu()
 
     def seleccionar_metodo(m):
         metodo_seleccionado["id"] = m.id_metodos_pago
@@ -1235,214 +1095,7 @@ def nueva_venta_view(
         metodo_text.value = f"Método: {m.nombre}"
         page.update()
 
-    def seleccionar_proveedor(p):
-        if any(item["id"] == p.id_proveedor for item in proveedores_seleccionados):
-            return
-        proveedores_seleccionados.append(
-            {
-                "id": p.id_proveedor,
-                "nombre": p.nombre,
-                "costo": float(p.cuanto_cobra or 0),
-            }
-        )
-        actualizar_proveedores_resumen()
-        refrescar_menu()
-
-    def quitar_proveedor(id_proveedor):
-        proveedores_seleccionados[:] = [item for item in proveedores_seleccionados if item["id"] != id_proveedor]
-        actualizar_proveedores_resumen()
-        refrescar_menu()
-
-    def limpiar_proveedor():
-        proveedores_seleccionados.clear()
-        actualizar_proveedores_resumen()
-        refrescar_menu()
-
-    actualizar_proveedores_resumen()
-
-    def crear_mensaje_comprobante(
-        consecutivo: str,
-        items: list[dict],
-        total: float,
-        metodo_pago: str,
-        pendiente_pago: bool,
-    ) -> str:
-        return generar_mensaje_comprobante(
-            negocio=etiqueta_negocio,
-            consecutivo=consecutivo,
-            fecha_hora=datetime.datetime.now(),
-            mesa=nombre_mesa_seleccionada(),
-            items=items,
-            subtotal=total,
-            total=total,
-            metodo_pago=metodo_pago,
-            pendiente_pago=pendiente_pago,
-        )
-
-    def crear_pdf_comprobante(
-        consecutivo: str,
-        items: list[dict],
-        total: float,
-        metodo_pago: str,
-        pendiente_pago: bool,
-    ) -> bytes | None:
-        if os.environ.get("WHATSAPP_PROVIDER", "wa_me").strip().lower() != "cloud_api":
-            return None
-        return generar_comprobante_pdf(
-            negocio=etiqueta_negocio,
-            consecutivo=consecutivo,
-            fecha_hora=datetime.datetime.now(),
-            mesa=nombre_mesa_seleccionada(),
-            items=items,
-            subtotal=total,
-            total=total,
-            metodo_pago=metodo_pago,
-            pendiente_pago=pendiente_pago,
-        )
-
-    async def despachar_comprobante(
-        numero: str,
-        mensaje: str,
-        *,
-        venta_id: int | None = None,
-        cuenta_id_envio: int | None = None,
-        subcuenta_id_envio: int | None = None,
-        pdf_bytes: bytes | None = None,
-        nombre_pdf: str = "comprobante-venta.pdf",
-    ):
-        try:
-            resultado = await asyncio.to_thread(
-                enviar_comprobante,
-                numero,
-                mensaje,
-                pdf_bytes,
-                nombre_pdf,
-            )
-            if resultado.url:
-                page.launch_url(resultado.url)
-        except Exception as error:
-            detalle_error = str(error) or "No se pudo enviar el comprobante."
-            if venta_id is not None:
-                actualizar_estado_envio_venta(
-                    db,
-                    venta_id,
-                    ESTADO_ERROR,
-                    detalle_error,
-                )
-            elif cuenta_id_envio is not None:
-                actualizar_estado_whatsapp_cuenta(
-                    db,
-                    cuenta_id_envio,
-                    ESTADO_ERROR,
-                )
-            elif subcuenta_id_envio is not None:
-                actualizar_estado_whatsapp_subcuenta(
-                    db,
-                    subcuenta_id_envio,
-                    ESTADO_ERROR,
-                )
-            whatsapp_status_text.value = f"Error de envío: {detalle_error}"
-            mensaje_venta_text.value = (
-                "El pago/cuenta se conservó. Revisa WhatsApp e inténtalo de nuevo."
-            )
-            page.update()
-            return None
-
-        if venta_id is not None:
-            actualizar_estado_envio_venta(
-                db,
-                venta_id,
-                resultado.estado,
-            )
-        elif cuenta_id_envio is not None:
-            actualizar_estado_whatsapp_cuenta(
-                db,
-                cuenta_id_envio,
-                resultado.estado,
-            )
-        elif subcuenta_id_envio is not None:
-            actualizar_estado_whatsapp_subcuenta(
-                db,
-                subcuenta_id_envio,
-                resultado.estado,
-            )
-
-        whatsapp_status_text.value = (
-            "WhatsApp abrió el mensaje. Confirma el envío en la aplicación."
-            if resultado.estado == ESTADO_PENDIENTE
-            else "WhatsApp aceptó el mensaje para su entrega."
-        )
-        page.update()
-        return resultado
-
-    async def enviar_comprobante_manual(_evento):
-        nonlocal mesa_persistida_id
-        if cuenta_dividida:
-            mensaje_venta_text.value = (
-                "Usa el botón de WhatsApp de la subcuenta correspondiente."
-            )
-            page.update()
-            return
-        if not carrito:
-            mensaje_venta_text.value = (
-                "Agrega productos antes de preparar el comprobante."
-            )
-            page.update()
-            return
-        try:
-            numero = validar_numero_colombiano(whatsapp_field.value or "")
-            cuenta = guardar_cuenta_abierta(
-                db=db,
-                carrito=carrito,
-                mesa_id=mesa_seleccionada["id"],
-                proveedores_seleccionados=proveedores_seleccionados,
-                usuario_id=getattr(usuario_actual, "id_usuario", None),
-                cuenta_id=cuenta_abierta["id"],
-                version=cuenta_abierta["version"],
-                whatsapp_cliente=numero,
-                whatsapp_en_confirmar=whatsapp_auto_checkbox.value,
-            )
-        except ValueError as error:
-            mensaje_venta_text.value = str(error)
-            page.update()
-            return
-        except Exception:
-            db.rollback()
-            mensaje_venta_text.value = (
-                "No fue posible guardar el contacto del comprobante."
-            )
-            page.update()
-            return
-
-        cuenta_abierta["id"] = cuenta.id_cuenta
-        cuenta_abierta["version"] = cuenta.version
-        mesa_persistida_id = mesa_seleccionada["id"]
-        whatsapp_field.value = numero.removeprefix("+57")
-        mensaje = crear_mensaje_comprobante(
-            f"Cuenta abierta #{cuenta.id_cuenta}",
-            carrito,
-            sum(item["precio"] * item["cantidad"] for item in carrito),
-            "Pendiente de pago",
-            True,
-        )
-        pdf_bytes = crear_pdf_comprobante(
-            f"Cuenta abierta #{cuenta.id_cuenta}",
-            carrito,
-            sum(item["precio"] * item["cantidad"] for item in carrito),
-            "Pendiente de pago",
-            True,
-        )
-        await despachar_comprobante(
-            numero,
-            mensaje,
-            cuenta_id_envio=cuenta.id_cuenta,
-            pdf_bytes=pdf_bytes,
-            nombre_pdf=f"precuenta-{cuenta.id_cuenta}.pdf",
-        )
-
-    btn_whatsapp.on_click = enviar_comprobante_manual
-
-    async def ejecutar_venta():
+    def ejecutar_venta():
         if not carrito:
             mensaje_venta_text.value = "Agrega al menos un producto para registrar la venta."
             page.update()
@@ -1458,23 +1111,6 @@ def nueva_venta_view(
             mensaje_venta_text.value = "Debes seleccionar un método de pago antes de confirmar la venta."
             page.update()
             return
-        numero_whatsapp = None
-        if whatsapp_field.value and whatsapp_field.value.strip():
-            try:
-                numero_whatsapp = validar_numero_colombiano(
-                    whatsapp_field.value
-                )
-            except ValueError as error:
-                mensaje_venta_text.value = str(error)
-                page.update()
-                return
-        if whatsapp_auto_checkbox.value and numero_whatsapp is None:
-            mensaje_venta_text.value = (
-                "Ingresa un celular válido para enviar el comprobante al pagar."
-            )
-            page.update()
-            return
-
         try:
             for item in carrito:
                 validar_item_venta(item)
@@ -1504,7 +1140,7 @@ def nueva_venta_view(
                     raise ValueError(
                         "Guarda primero el cambio de mesa antes de cobrar la cuenta."
                     )
-                venta_registrada = cobrar_cuenta_abierta(
+                cobrar_cuenta_abierta(
                     db=db,
                     cuenta_id=cuenta_abierta["id"],
                     version=cuenta_abierta["version"],
@@ -1512,22 +1148,17 @@ def nueva_venta_view(
                     usuario_actual=usuario_actual,
                     caja_actual=caja_actual,
                     carrito=carrito,
-                    proveedores_seleccionados=proveedores_seleccionados,
-                    whatsapp_cliente=numero_whatsapp,
-                    whatsapp_en_confirmar=whatsapp_auto_checkbox.value,
                 )
             else:
                 from services.venta_service import registrar_venta
 
-                venta_registrada = registrar_venta(
+                registrar_venta(
                     db_session=db,
                     carrito=carrito,
                     metodo_id=metodo_seleccionado["id"],
                     usuario_actual=usuario_actual,
                     caja_actual=caja_actual,
-                    proveedores_seleccionados=proveedores_seleccionados,
                     mesa_id=mesa_seleccionada["id"],
-                    whatsapp_cliente=numero_whatsapp,
                     domicilio=datos_domicilio,
                 )
         except ValueError as error:
@@ -1541,33 +1172,7 @@ def nueva_venta_view(
             page.update()
             return
 
-        if whatsapp_auto_checkbox.value and numero_whatsapp:
-            items_comprobante = [dict(item) for item in carrito]
-            mensaje = crear_mensaje_comprobante(
-                str(venta_registrada.id_venta),
-                items_comprobante,
-                float(venta_registrada.total),
-                metodo_seleccionado["nombre"],
-                False,
-            )
-            pdf_bytes = crear_pdf_comprobante(
-                str(venta_registrada.id_venta),
-                items_comprobante,
-                float(venta_registrada.total),
-                metodo_seleccionado["nombre"],
-                False,
-            )
-            await despachar_comprobante(
-                numero_whatsapp,
-                mensaje,
-                venta_id=venta_registrada.id_venta,
-                pdf_bytes=pdf_bytes,
-                nombre_pdf=f"comprobante-{venta_registrada.id_venta}.pdf",
-            )
-
         carrito.clear()
-        proveedores_seleccionados.clear()
-        actualizar_proveedores_resumen()
         mensaje_venta_text.value = ""
         db.close()
         on_venta_completada()
@@ -1578,17 +1183,13 @@ def nueva_venta_view(
             page.update()
             return
         try:
-            numero = numero_whatsapp_actual()
             cuenta = guardar_cuenta_abierta(
                 db=db,
                 carrito=carrito,
                 mesa_id=mesa_seleccionada["id"],
-                proveedores_seleccionados=proveedores_seleccionados,
                 usuario_id=getattr(usuario_actual, "id_usuario", None),
                 cuenta_id=cuenta_abierta["id"],
                 version=cuenta_abierta["version"],
-                whatsapp_cliente=numero,
-                whatsapp_en_confirmar=whatsapp_auto_checkbox.value,
             )
         except ValueError as error:
             mensaje_venta_text.value = str(error)
@@ -1601,11 +1202,6 @@ def nueva_venta_view(
 
         cuenta_abierta["id"] = cuenta.id_cuenta
         cuenta_abierta["version"] = cuenta.version
-        whatsapp_field.value = (
-            cuenta.whatsapp_cliente.removeprefix("+57")
-            if cuenta.whatsapp_cliente
-            else ""
-        )
         mensaje_venta_text.value = ""
         db.close()
         if on_cuenta_guardada:
@@ -1619,17 +1215,13 @@ def nueva_venta_view(
             raise ValueError("Esta cuenta ya está dividida.")
         if not carrito:
             raise ValueError("Agrega productos antes de dividir la cuenta.")
-        numero = numero_whatsapp_actual()
         cuenta = guardar_cuenta_abierta(
             db=db,
             carrito=carrito,
             mesa_id=mesa_seleccionada["id"],
-            proveedores_seleccionados=proveedores_seleccionados,
             usuario_id=getattr(usuario_actual, "id_usuario", None),
             cuenta_id=cuenta_abierta["id"],
             version=cuenta_abierta["version"],
-            whatsapp_cliente=numero,
-            whatsapp_en_confirmar=whatsapp_auto_checkbox.value,
         )
         cuenta_abierta["id"] = cuenta.id_cuenta
         cuenta_abierta["version"] = cuenta.version
@@ -1713,6 +1305,7 @@ def nueva_venta_view(
                 return
             except Exception:
                 db.rollback()
+                logger.exception("Error al dividir una cuenta en partes iguales")
                 mensaje_venta_text.value = "No fue posible dividir la cuenta."
                 page.update()
                 return
@@ -2293,23 +1886,11 @@ def nueva_venta_view(
     def mostrar_confirmacion_cobro_subcuenta(
         subcuenta,
         metodo_dropdown,
-        whatsapp_input,
-        whatsapp_auto,
-        items_subcuenta,
     ):
-        async def aceptar(_evento):
+        def aceptar(_evento):
             try:
-                numero = (
-                    validar_numero_colombiano(whatsapp_input.value or "")
-                    if (whatsapp_input.value or "").strip()
-                    else None
-                )
-                if whatsapp_auto.value and numero is None:
-                    raise ValueError(
-                        "Ingresa un celular válido para enviar el comprobante al pagar."
-                    )
                 metodo_id = int(metodo_dropdown.value)
-                venta_subcuenta, cuenta_cerrada = cobrar_subcuenta(
+                _, cuenta_cerrada = cobrar_subcuenta(
                     db=db,
                     cuenta_id=cuenta_abierta["id"],
                     version_cuenta=cuenta_abierta["version"],
@@ -2318,8 +1899,6 @@ def nueva_venta_view(
                     metodo_id=metodo_id,
                     usuario_actual=usuario_actual,
                     caja_actual=caja_actual,
-                    whatsapp_cliente=numero,
-                    whatsapp_en_confirmar=whatsapp_auto.value,
                 )
             except ValueError as error:
                 page.pop_dialog()
@@ -2332,44 +1911,6 @@ def nueva_venta_view(
                 mensaje_venta_text.value = "No fue posible cobrar esta subcuenta."
                 page.update()
                 return
-
-            if whatsapp_auto.value and numero:
-                mensaje = crear_mensaje_comprobante(
-                    str(venta_subcuenta.id_venta),
-                    items_subcuenta,
-                    float(venta_subcuenta.total),
-                    next(
-                        (
-                            metodo.nombre
-                            for metodo in lista_metodos
-                            if metodo.id_metodos_pago == int(metodo_dropdown.value)
-                        ),
-                        "No disponible",
-                    ),
-                    False,
-                )
-                pdf_bytes = crear_pdf_comprobante(
-                    str(venta_subcuenta.id_venta),
-                    items_subcuenta,
-                    float(venta_subcuenta.total),
-                    next(
-                        (
-                            metodo.nombre
-                            for metodo in lista_metodos
-                            if metodo.id_metodos_pago
-                            == int(metodo_dropdown.value)
-                        ),
-                        "No disponible",
-                    ),
-                    False,
-                )
-                await despachar_comprobante(
-                    numero,
-                    mensaje,
-                    venta_id=venta_subcuenta.id_venta,
-                    pdf_bytes=pdf_bytes,
-                    nombre_pdf=f"comprobante-{venta_subcuenta.id_venta}.pdf",
-                )
 
             page.pop_dialog()
             if cuenta_cerrada:
@@ -2420,24 +1961,6 @@ def nueva_venta_view(
         for registro in subcuentas_cargadas:
             subcuenta = registro["subcuenta"]
             pagada = subcuenta.estado == "PAGADA"
-            whatsapp_input = ft.TextField(
-                label="Celular (10 dígitos)",
-                hint_text="3001234567",
-                value=(
-                    subcuenta.whatsapp_cliente.removeprefix("+57")
-                    if subcuenta.whatsapp_cliente
-                    else ""
-                ),
-                keyboard_type=ft.KeyboardType.PHONE,
-                max_length=10,
-                width=190,
-                disabled=pagada,
-            )
-            whatsapp_auto = ft.Checkbox(
-                label="Enviar al pagar",
-                value=bool(subcuenta.whatsapp_en_confirmar),
-                disabled=pagada,
-            )
             selector_metodo = ft.Dropdown(
                 label="Método de pago",
                 width=150,
@@ -2455,75 +1978,11 @@ def nueva_venta_view(
                 disabled=pagada or not lista_metodos,
             )
             detalle = []
-            items_subcuenta = []
             for item_registro in registro["items"]:
                 asignacion = item_registro["asignacion"]
                 item = item_registro["item"]
                 detalle.append(f"{asignacion.cantidad} × {item.nombre}")
-                items_subcuenta.append(
-                    {
-                        "nombre": item.nombre,
-                        "cantidad": asignacion.cantidad,
-                        "precio": item.precio_unitario,
-                        "personalizacion": item.personalizacion,
-                    }
-                )
-            if not items_subcuenta:
-                items_subcuenta = [
-                    {
-                        "nombre": f"Consumo de la cuenta · Subcuenta {subcuenta.etiqueta}",
-                        "cantidad": 1,
-                        "precio": float(subcuenta.total),
-                    }
-                ]
 
-            async def enviar_precuenta_subcuenta(
-                _evento,
-                subcuenta=subcuenta,
-                phone_field=whatsapp_input,
-                auto_checkbox=whatsapp_auto,
-                items=items_subcuenta,
-            ):
-                try:
-                    numero = validar_numero_colombiano(phone_field.value or "")
-                    guardada = actualizar_contacto_subcuenta(
-                        db,
-                        subcuenta.id_subcuenta,
-                        subcuenta.version,
-                        numero,
-                        auto_checkbox.value,
-                    )
-                except ValueError as error:
-                    mensaje_venta_text.value = str(error)
-                    page.update()
-                    return
-
-                subcuenta.version = guardada.version
-                phone_field.value = numero.removeprefix("+57")
-                mensaje = crear_mensaje_comprobante(
-                    f"Cuenta #{cuenta_abierta['id']} · Subcuenta {subcuenta.etiqueta}",
-                    items,
-                    float(subcuenta.total),
-                    "Pendiente de pago",
-                    True,
-                )
-                pdf_bytes = crear_pdf_comprobante(
-                    f"Cuenta #{cuenta_abierta['id']} · Subcuenta {subcuenta.etiqueta}",
-                    items,
-                    float(subcuenta.total),
-                    "Pendiente de pago",
-                    True,
-                )
-                await despachar_comprobante(
-                    numero,
-                    mensaje,
-                    subcuenta_id_envio=subcuenta.id_subcuenta,
-                    pdf_bytes=pdf_bytes,
-                    nombre_pdf=(
-                        f"precuenta-{cuenta_abierta['id']}-"
-                        f"{subcuenta.etiqueta}.pdf"
-                    ),
-                )
             subcuentas_column.controls.append(
                 ft.Container(
                     padding=12,
@@ -2558,25 +2017,6 @@ def nueva_venta_view(
                                 size=18,
                                 weight="bold",
                             ),
-                            *(
-                                [
-                                    ft.Text(
-                                        f"WhatsApp: {subcuenta.whatsapp_estado_envio}",
-                                        color=(
-                                            "#FF7B7B"
-                                            if subcuenta.whatsapp_estado_envio
-                                            == ESTADO_ERROR
-                                            else "#80C78A"
-                                            if subcuenta.whatsapp_estado_envio
-                                            == ESTADO_ENVIADO
-                                            else "#FFB86C"
-                                        ),
-                                        size=12,
-                                    )
-                                ]
-                                if subcuenta.whatsapp_estado_envio
-                                else []
-                            ),
                             ft.Row(
                                 controls=[
                                     selector_metodo,
@@ -2586,35 +2026,14 @@ def nueva_venta_view(
                                         color="white",
                                         disabled=pagada or not lista_metodos,
                                         on_click=lambda _e, registro=subcuenta,
-                                        selector=selector_metodo,
-                                        telefono=whatsapp_input,
-                                        enviar_auto=whatsapp_auto,
-                                        items=items_subcuenta:
+                                        selector=selector_metodo:
                                             mostrar_confirmacion_cobro_subcuenta(
                                                 registro,
                                                 selector,
-                                                telefono,
-                                                enviar_auto,
-                                                items,
                                             ),
                                     ),
                                 ],
                                 wrap=True,
-                            ),
-                            ft.Row(
-                                controls=[
-                                    ft.Text("+57", color="#C9CEDB"),
-                                    whatsapp_input,
-                                ],
-                                wrap=True,
-                            ),
-                            whatsapp_auto,
-                            ft.Button(
-                                "Enviar comprobante",
-                                bgcolor="#2E7D5B",
-                                color="white",
-                                disabled=pagada,
-                                on_click=enviar_precuenta_subcuenta,
                             ),
                         ],
                     ),
@@ -2622,8 +2041,8 @@ def nueva_venta_view(
             )
 
     def confirmar_venta(e):
-        if not carrito and not proveedores_seleccionados:
-            mensaje_venta_text.value = "Agrega productos o selecciona al menos un proveedor."
+        if not carrito:
+            mensaje_venta_text.value = "Agrega al menos un producto para confirmar la venta."
             page.update()
             return
 
@@ -2635,11 +2054,10 @@ def nueva_venta_view(
                 mensaje_venta_text.value = str(error)
                 page.update()
                 return
-        total_proveedores = sum(item["costo"] for item in proveedores_seleccionados)
 
-        async def aceptar(_e):
+        def aceptar(_e):
             page.pop_dialog()
-            await ejecutar_venta()
+            ejecutar_venta()
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -2651,11 +2069,6 @@ def nueva_venta_view(
                     ft.Text(f"Productos en el carrito: {len(carrito)}", color="#C9CEDB"),
                     ft.Text(f"Total a cobrar: ${total:,.0f}".replace(",", "."), size=18, weight="bold", color="#F2C744"),
                     ft.Text(f"Método de pago: {metodo_seleccionado.get('nombre', 'No seleccionado')}", color="#C9CEDB"),
-                    (
-                        ft.Text(f"Costo a proveedores: ${total_proveedores:,.0f}".replace(",", "."), color="#FFB86C")
-                        if proveedores_seleccionados
-                        else ft.Text("Sin proveedores asociados a esta venta.", color="#A7AEC2")
-                    ),
                     ft.Text("¿Deseas confirmar y registrar esta venta?", color="white"),
                 ],
             ),
@@ -2719,16 +2132,6 @@ def nueva_venta_view(
     btn_cambiar_mesa.visible = (
         not cuenta_dividida and tipo_pedido_actual != "DOMICILIO"
     )
-    whatsapp_field.visible = not cuenta_dividida
-    whatsapp_header.visible = not cuenta_dividida
-    whatsapp_phone_row.visible = not cuenta_dividida
-    whatsapp_auto_checkbox.visible = not cuenta_dividida
-    whatsapp_status_text.visible = not cuenta_dividida
-    btn_whatsapp.visible = not cuenta_dividida
-    proveedores_column.visible = not cuenta_dividida
-    proveedor_text.visible = not cuenta_dividida
-    proveedor_costo_text.visible = not cuenta_dividida
-
     panel_carrito = ft.Container(
         width=320,
         bgcolor="#3A3F52",
@@ -2752,15 +2155,6 @@ def nueva_venta_view(
                 botones_metodo,
                 ft.Divider(color="#5A5F72"),
                 domicilio_fields,
-                whatsapp_header,
-                whatsapp_phone_row,
-                whatsapp_help_text,
-                whatsapp_auto_checkbox,
-                btn_whatsapp,
-                whatsapp_status_text,
-                proveedor_text,
-                proveedores_column,
-                proveedor_costo_text,
                 mensaje_venta_text,
                 ft.Container(height=15),
                 btn_dividir,

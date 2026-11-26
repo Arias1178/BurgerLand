@@ -3,6 +3,10 @@ import flet as ft
 from database.database import SessionLocal
 from database.models import categorias, estados_productos, inventario, productos, rol
 from services.inventario_service import buscar_inventario_para_producto
+from services.recetas_service import (
+    guardar_receta_producto,
+    obtener_receta_producto,
+)
 
 
 ESTADO_ACTIVO = "ACTIVO"
@@ -89,6 +93,168 @@ def menu_view(page: ft.Page, navbar, usuario_actual=None):
             ],
         )
         page.show_dialog(dialog)
+
+    def editar_receta(prod):
+        db_local = SessionLocal()
+        try:
+            opciones_inventario = (
+                db_local.query(inventario)
+                .filter(inventario.estado == ESTADO_ACTIVO)
+                .order_by(inventario.nombre.asc())
+                .all()
+            )
+            filas_actuales = obtener_receta_producto(
+                db_local, prod.id_producto
+            )
+        finally:
+            db_local.close()
+
+        filas = []
+        lista_filas = ft.Column(spacing=8, scroll="auto", height=380)
+        mensaje = ft.Text("", color="#FF7B7B", size=12)
+
+        def refrescar_filas():
+            lista_filas.controls = [fila["control"] for fila in filas]
+            page.update()
+
+        def agregar_fila(
+            id_inventario=None,
+            cantidad=1,
+            grupo_opcion=None,
+            opcion=None,
+        ):
+            opciones = [
+                ft.dropdown.Option(
+                    str(item.id_inventario),
+                    f"{item.nombre} · {item.unidad_medida}",
+                )
+                for item in opciones_inventario
+            ]
+            inventario_field = ft.Dropdown(
+                label="Ingrediente",
+                width=350,
+                value=str(id_inventario)
+                if id_inventario is not None
+                else (opciones[0].key if opciones else None),
+                options=opciones,
+            )
+            cantidad_field = ft.TextField(
+                label="Cantidad por plato",
+                value=str(cantidad),
+                width=150,
+                keyboard_type=ft.KeyboardType.NUMBER,
+            )
+            datos = {
+                "inventario": inventario_field,
+                "cantidad": cantidad_field,
+                "grupo_opcion": grupo_opcion,
+                "opcion": opcion,
+            }
+            controles = [inventario_field, cantidad_field]
+            if grupo_opcion:
+                controles.append(
+                    ft.Text(
+                        f"{grupo_opcion}: {opcion}",
+                        width=220,
+                        color="#C9CEDB",
+                        size=12,
+                    )
+                )
+            fila = ft.Row(
+                wrap=True,
+                spacing=8,
+                controls=controles,
+            )
+            datos["control"] = ft.Column(
+                spacing=2,
+                controls=[
+                    fila,
+                    ft.TextButton(
+                        "Quitar ingrediente",
+                        on_click=lambda _evento, linea=datos: quitar_fila(linea),
+                    ),
+                ],
+            )
+            filas.append(datos)
+            refrescar_filas()
+
+        def quitar_fila(fila):
+            filas.remove(fila)
+            refrescar_filas()
+
+        for receta, item in filas_actuales:
+            agregar_fila(
+                receta.id_inventario,
+                receta.cantidad,
+                receta.grupo_opcion,
+                receta.opcion,
+            )
+
+        def guardar(_evento):
+            ingredientes = []
+            for fila in filas:
+                if not fila["inventario"].value:
+                    mensaje.value = "Selecciona un ingrediente para cada línea."
+                    page.update()
+                    return
+                ingredientes.append(
+                    {
+                        "id_inventario": fila["inventario"].value,
+                        "cantidad": fila["cantidad"].value,
+                        "grupo_opcion": fila["grupo_opcion"],
+                        "opcion": fila["opcion"],
+                    }
+                )
+
+            db_local = SessionLocal()
+            try:
+                guardar_receta_producto(
+                    db_local,
+                    prod.id_producto,
+                    ingredientes,
+                )
+            except ValueError as error:
+                mensaje.value = str(error)
+                page.update()
+                return
+            finally:
+                db_local.close()
+            page.pop_dialog()
+            recargar()
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(f"Receta: {prod.nombre}"),
+                content=ft.Container(
+                    width=800,
+                    content=ft.Column(
+                        tight=True,
+                        controls=[
+                            ft.Text(
+                                "Las cantidades están expresadas en la unidad "
+                                "indicada para cada insumo.",
+                                color="#C9CEDB",
+                                size=12,
+                            ),
+                            lista_filas,
+                            ft.TextButton(
+                                "Agregar ingrediente",
+                                on_click=lambda _evento: agregar_fila(),
+                            ),
+                            mensaje,
+                        ],
+                    ),
+                ),
+                actions=[
+                    ft.TextButton(
+                        "Cancelar",
+                        on_click=lambda _evento: page.pop_dialog(),
+                    ),
+                    ft.TextButton("Guardar receta", on_click=guardar),
+                ],
+            )
+        )
 
     def obtener_estado_producto_por_nombre(nombre_estado):
         db_local = SessionLocal()
@@ -207,7 +373,9 @@ def menu_view(page: ft.Page, navbar, usuario_actual=None):
         )
 
         def guardar(mensaje):
-            if not nombre.value.strip():
+            nombre_valor = (nombre.value or "").strip()
+            descripcion_valor = (descripcion.value or "").strip() or None
+            if not nombre_valor:
                 mensaje.value = "El nombre del producto es obligatorio."
                 return False
 
@@ -238,10 +406,10 @@ def menu_view(page: ft.Page, navbar, usuario_actual=None):
 
                 if prod is None:
                     registro = productos(
-                        nombre=nombre.value.strip(),
+                        nombre=nombre_valor,
                         precio=precio_valor,
                         stock=stock_valor,
-                        descripcion=descripcion.value.strip() or None,
+                        descripcion=descripcion_valor,
                         id_categoria=int(categoria.value),
                         id_estado=estado_id,
                         id_proveedor=None,
@@ -253,10 +421,10 @@ def menu_view(page: ft.Page, navbar, usuario_actual=None):
                     if not registro:
                         mensaje.value = "No fue posible actualizar el producto."
                         return False
-                    registro.nombre = nombre.value.strip()
+                    registro.nombre = nombre_valor
                     registro.precio = precio_valor
                     registro.stock = stock_valor
-                    registro.descripcion = descripcion.value.strip() or None
+                    registro.descripcion = descripcion_valor
                     registro.id_categoria = int(categoria.value)
                     registro.id_estado = estado_id
                     registro.id_inventario = id_inventario
@@ -267,7 +435,7 @@ def menu_view(page: ft.Page, navbar, usuario_actual=None):
                     ).first()
                     inventario_coincidente = buscar_inventario_para_producto(
                         db_local,
-                        nombre.value.strip(),
+                        nombre_valor,
                         categoria_menu.nombre if categoria_menu else "",
                     )
                     if inventario_coincidente:
@@ -315,6 +483,10 @@ def menu_view(page: ft.Page, navbar, usuario_actual=None):
         botones = []
         if es_admin:
             botones = [
+                ft.TextButton(
+                    "Receta",
+                    on_click=lambda e, p=prod: editar_receta(p),
+                ),
                 ft.TextButton("Editar", on_click=lambda e, p=prod: editar_producto(p)),
                 ft.TextButton("Restaurar" if es_inactivo else "Eliminar", on_click=lambda e, p=prod: (alternar_producto(p) and recargar())),
                 ft.TextButton(

@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from database.database import Base
-from database.models import rol
+from database.models import compras, detalles_compras, inventario, rol
 from views.compras import compras_view
 
 
@@ -66,9 +66,46 @@ class ComprasViewTests(unittest.TestCase):
             "No hay retiros pendientes o conciliados.",
             self.recopilar_textos(view),
         )
+        self.assertIn("Aún no hay compras registradas.", self.recopilar_textos(view))
         self.assertIsNone(tarjeta.expand)
         self.assertIsNone(tarjeta.content.scroll)
         self.assertFalse(page.update.called)
+
+    def test_purchase_history_shows_detached_supplier_and_line_details(self):
+        fecha = datetime.datetime(2026, 11, 25, 14, 30)
+        with self.session_factory() as db:
+            item = inventario(
+                nombre="Caja de vasos",
+                categoria="Empaques",
+                unidad_medida="caja",
+                cantidad=2,
+                stock_minimo=0,
+                costo_unitario=12000,
+            )
+            db.add(item)
+            db.flush()
+            compra = compras(fecha=fecha, total=24000, id_proveedor=None)
+            db.add(compra)
+            db.flush()
+            db.add(
+                detalles_compras(
+                    cantidad=2,
+                    precio=12000,
+                    subtotal=24000,
+                    id_compra=compra.id_compra,
+                    id_inventario=item.id_inventario,
+                )
+            )
+            db.commit()
+
+        _, view = self.crear_vista([])
+        textos = self.recopilar_textos(view)
+
+        self.assertIn("HISTORIAL DE COMPRAS", textos)
+        self.assertIn("Compra #1 · 25/11/2026 14:30", textos)
+        self.assertIn("Proveedor eliminado / sin asignar", textos)
+        self.assertIn("2 × Caja de vasos — $12.000 c/u · Subtotal $24.000", textos)
+        self.assertIn("Total $24.000", textos)
 
     def test_reconciliation_renders_withdrawal_details_and_action(self):
         retiro = SimpleNamespace(

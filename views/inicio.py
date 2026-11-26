@@ -68,9 +68,21 @@ def inicio_view(
             abrir_dialogo_confirmacion(resultado["mensaje"])
             return
 
-        mensaje.value = resultado.get("mensaje", "No se pudo abrir la caja.")
-        mensaje.color = "#FF7B7B"
+        if resultado and resultado.get("ok"):
+            mensaje.value = resultado.get(
+                "mensaje", "Caja abierta correctamente."
+            )
+            mensaje.color = "#7AE582"
+        else:
+            mensaje.value = (
+                resultado.get("mensaje", "No se pudo abrir la caja.")
+                if resultado
+                else "No se pudo abrir la caja."
+            )
+            mensaje.color = "#FF7B7B"
         page.update()
+        if resultado and resultado.get("ok") and on_refrescar:
+            on_refrescar()
 
     def abrir_dialogo_confirmacion(mensaje_advertencia):
         def aceptar(_e):

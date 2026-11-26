@@ -1,7 +1,7 @@
 import flet as ft
 
 from database.database import SessionLocal
-from database.models import inventario, proveedores
+from database.models import compras, detalles_compras, inventario, proveedores
 from services.compras_service import registrar_compra
 from services.retiros_caja_service import (
     DIAS_ALERTA_RETIRO,
@@ -37,6 +37,7 @@ def compras_view(page: ft.Page, navbar, usuario_actual=None):
 
     mensaje = ft.Text("", size=13)
     conciliacion = ft.Column(spacing=10)
+    historial_compras = ft.Column(spacing=10)
     proveedor = ft.Dropdown(
         label="Proveedor",
         options=[
@@ -46,6 +47,115 @@ def compras_view(page: ft.Page, navbar, usuario_actual=None):
     )
     lineas = []
     lineas_container = ft.Column(spacing=8)
+
+    def refrescar_historial_compras(actualizar=True):
+        db_local = SessionLocal()
+        try:
+            registros = (
+                db_local.query(compras, proveedores, detalles_compras, inventario)
+                .outerjoin(
+                    proveedores,
+                    compras.id_proveedor == proveedores.id_proveedor,
+                )
+                .outerjoin(
+                    detalles_compras,
+                    detalles_compras.id_compra == compras.id_compra,
+                )
+                .outerjoin(
+                    inventario,
+                    detalles_compras.id_inventario == inventario.id_inventario,
+                )
+                .order_by(
+                    compras.fecha.desc(),
+                    compras.id_compra.desc(),
+                    detalles_compras.id_detalle_compras.asc(),
+                )
+                .all()
+            )
+        finally:
+            db_local.close()
+
+        compras_por_id = {}
+        for compra, proveedor_registro, detalle, item in registros:
+            registro = compras_por_id.setdefault(
+                compra.id_compra,
+                {
+                    "compra": compra,
+                    "proveedor": proveedor_registro,
+                    "detalles": [],
+                },
+            )
+            if detalle:
+                nombre_item = item.nombre if item else "Ítem no disponible"
+                registro["detalles"].append(
+                    (
+                        f"{detalle.cantidad} × {nombre_item} — "
+                        f"${detalle.precio:,.0f} c/u · "
+                        f"Subtotal ${detalle.subtotal:,.0f}"
+                    ).replace(",", ".")
+                )
+
+        if not compras_por_id:
+            historial_compras.controls = [
+                ft.Container(
+                    padding=16,
+                    bgcolor="#2C2F3E",
+                    border_radius=10,
+                    content=ft.Text(
+                        "Aún no hay compras registradas.",
+                        color="#C9CEDB",
+                    ),
+                )
+            ]
+        else:
+            historial_compras.controls = []
+            for registro in compras_por_id.values():
+                compra = registro["compra"]
+                proveedor_registro = registro["proveedor"]
+                detalles = registro["detalles"] or ["Sin detalles registrados."]
+                historial_compras.controls.append(
+                    ft.Container(
+                        padding=14,
+                        bgcolor="#2C2F3E",
+                        border_radius=12,
+                        content=ft.Column(
+                            spacing=6,
+                            controls=[
+                                ft.Row(
+                                    wrap=True,
+                                    alignment="spaceBetween",
+                                    controls=[
+                                        ft.Text(
+                                            f"Compra #{compra.id_compra} · "
+                                            f"{compra.fecha:%d/%m/%Y %H:%M}",
+                                            color="white",
+                                            weight="bold",
+                                        ),
+                                        ft.Text(
+                                            (
+                                                proveedor_registro.nombre
+                                                if proveedor_registro
+                                                else "Proveedor eliminado / sin asignar"
+                                            ),
+                                            color="#C9CEDB",
+                                        ),
+                                        ft.Text(
+                                            f"Total ${compra.total:,.0f}".replace(",", "."),
+                                            color="#F2C744",
+                                            weight="bold",
+                                        ),
+                                    ],
+                                ),
+                                *[
+                                    ft.Text(detalle, color="#C9CEDB")
+                                    for detalle in detalles
+                                ],
+                            ],
+                        ),
+                    )
+                )
+        if actualizar:
+            page.update()
 
     def mostrar_mensaje(texto, color):
         mensaje.value = texto
@@ -200,6 +310,7 @@ def compras_view(page: ft.Page, navbar, usuario_actual=None):
         proveedor.value = None
         lineas.clear()
         reconstruir_lineas()
+        refrescar_historial_compras(actualizar=False)
         refrescar_conciliacion()
 
     def abrir_vinculo(retiro_id):
@@ -417,6 +528,7 @@ def compras_view(page: ft.Page, navbar, usuario_actual=None):
             ],
         )
 
+    refrescar_historial_compras(actualizar=False)
     refrescar_conciliacion(actualizar=False)
     return ft.Column(
         expand=True,
@@ -441,6 +553,14 @@ def compras_view(page: ft.Page, navbar, usuario_actual=None):
                             bgcolor="#5A5F72",
                             on_click=abrir_registro,
                         ),
+                        ft.Divider(color="#5A5F72"),
+                        ft.Text(
+                            "HISTORIAL DE COMPRAS",
+                            size=18,
+                            weight="bold",
+                            color="white",
+                        ),
+                        historial_compras,
                         ft.Divider(color="#5A5F72"),
                         ft.Text(
                             "CONCILIACIÓN DE RETIROS",

@@ -1,6 +1,21 @@
 import unicodedata
+from collections import defaultdict
 
-from database.models import categorias, detalle_ventas, estados_productos, productos
+from sqlalchemy import func
+
+from database.models import (
+    catalogo_proveedores,
+    categorias,
+    detalle_ventas,
+    estados_productos,
+    inventario,
+    productos,
+    proveedores,
+)
+from services.proveedores_service import (
+    CATALOGO_ARTICULOS_AGRUPADOS_OBSOLETOS,
+    categorias_para_suministro,
+)
 
 
 CATEGORIAS_MENU = {
@@ -16,6 +31,12 @@ CATEGORIAS_MENU = {
     "Bebidas Frías": "Bebidas frías en diferentes presentaciones.",
     "Bebidas Calientes": "Bebidas calientes.",
     "A la Plancha": "Todos los platos son de 300 g, excepto las costillas, e incluyen dos acompañamientos a elección: papas francesas, criollas o casquitos; ensalada Primavera; ensalada Zanahoria; arepa con queso.",
+    "Snacks": "Papas, pasabocas y snacks individuales.",
+    "Galletas y Confitería": "Galletas, chocolates, dulces y gomas de mascar.",
+    "Ponqués y Pasteles": "Ponqués y productos de pastelería empacados.",
+    "Licores": "Licores y bebidas alcohólicas empacadas.",
+    "Cigarrillos": "Cigarrillos y productos de tabaco.",
+    "Otros": "Otros productos de proveedores.",
 }
 
 
@@ -85,15 +106,7 @@ PRODUCTOS_MENU = [
     ("Adiciones", "Porción de Huevos de Codorniz", 5000, None),
     ("Adiciones", "Porción de Papas", 6500, None),
     # Cold drinks
-    ("Bebidas Frías", "Bebidas 250 ml", 3000, None, ["Bebida 250 ML"]),
-    ("Bebidas Frías", "Bebidas 350 ml", 4000, None, ["Bebida 350 ML"]),
-    ("Bebidas Frías", "Gaseosa PET 250 ml", 3000, None, ["Gaseosa PET 250 ML"]),
-    ("Bebidas Frías", "Gaseosa PET 400 ml", 4500, None, ["Gaseosa PET 400 ML"]),
-    ("Bebidas Frías", "Gaseosa 1,5 L", 7500, None, ["Gaseosa 1.5 L"]),
     ("Bebidas Frías", "Coca-Cola 1,5 L", 8500, None, ["Coca Cola 1.5 L"]),
-    ("Bebidas Frías", "H2Oh!", 4500, None, ["H2Own"]),
-    ("Bebidas Frías", "Agua con Gas", 3000, None),
-    ("Bebidas Frías", "Botella de Agua", 2500, None),
     # Hot drinks
     ("Bebidas Calientes", "Milo", 5500, None),
     ("Bebidas Calientes", "Capuchino", 5000, None),
@@ -114,20 +127,34 @@ PRODUCTOS_MENU = [
 
 
 BEBIDAS_CERVEZA = [
-    ("Poker", 4000, "Cerveza nacional tradicional, botella de vidrio."),
-    ("Águila Original", 4000, "Cerveza nacional tradicional, botella de vidrio."),
-    ("Águila Light", 4000, "Cerveza nacional tradicional, botella de vidrio."),
+    ("Poker - Vidrio", 4000, "Cerveza nacional tradicional, botella de vidrio."),
+    ("Águila Original - Vidrio", 4000, "Cerveza nacional tradicional, botella de vidrio."),
+    ("Águila Light - Vidrio", 4000, "Cerveza nacional tradicional, botella de vidrio."),
     ("Club Colombia Dorada", 4000, "Cerveza nacional premium."),
     ("Club Colombia Roja", 4000, "Cerveza nacional premium."),
     ("Club Colombia Negra", 4000, "Cerveza nacional premium."),
-    ("Cola & Pola", 4000, "Refajo en lata roja."),
-    ("Corona Extra", 7000, "Cerveza importada, botella de vidrio."),
-    ("Stella Artois", 7000, "Cerveza importada, botella de vidrio."),
-    ("Costeñita", None, "Botella de vidrio verde pequeña. Pendiente definir precio."),
+    ("Cola & Pola - Lata", 4000, "Refajo en lata roja."),
+    ("Corona Extra - Vidrio", 7000, "Cerveza importada, botella de vidrio."),
+    ("Stella Artois - Vidrio", 7000, "Cerveza importada, botella de vidrio."),
+    ("Costeñita - Vidrio", None, "Botella de vidrio verde pequeña. Pendiente definir precio."),
     ("Redd's", None, "Cerveza cítrica en botella pequeña. Pendiente definir precio."),
-    ("Budweiser", None, "Lata roja. Pendiente definir precio."),
-    ("Heineken", None, "Lata verde. Pendiente definir precio."),
+    ("Budweiser - Lata", None, "Lata roja. Pendiente definir precio."),
+    ("Heineken - Lata", None, "Lata verde. Pendiente definir precio."),
 ]
+
+ALIASES_PRODUCTOS_CATALOGO = {
+    "Poker - Vidrio": ("Poker",),
+    "Águila Original - Vidrio": ("Águila Original",),
+    "Águila Light - Vidrio": ("Águila Light",),
+    "Cola & Pola - Lata": ("Cola & Pola",),
+    "Corona Extra - Vidrio": ("Corona Extra",),
+    "Stella Artois - Vidrio": ("Stella Artois",),
+    "Costeñita - Vidrio": ("Costeñita",),
+    "Budweiser - Lata": ("Budweiser",),
+    "Heineken - Lata": ("Heineken",),
+    "H2Oh! - Agua saborizada": ("H2Oh!",),
+    "Bretaña - Agua carbonatada": ("Agua con Gas",),
+}
 
 
 ALIASES_OBSOLETOS = {
@@ -137,11 +164,28 @@ ALIASES_OBSOLETOS = {
     ("Bebidas Frías", "Bebida PET 500 ML"),
     ("Bebidas Frías", "Bebida 250 ML"),
     ("Bebidas Frías", "Bebida 350 ML"),
+    ("Bebidas Frías", "Bebidas 250 ml"),
+    ("Bebidas Frías", "Bebidas 350 ml"),
+    ("Bebidas Frías", "Gaseosa PET 250 ml"),
+    ("Bebidas Frías", "Gaseosa PET 400 ml"),
+    ("Bebidas Frías", "Gaseosa 1,5 L"),
+    ("Bebidas Frías", "Agua con Gas"),
+    ("Bebidas Frías", "Botella de Agua"),
     ("Bebidas Frías", "H2Own"),
     ("Bebidas Frías", "Cerveza Nacional (Poker, Águila, Andina)"),
     ("Bebidas Frías", "Club Colombia"),
     ("Bebidas Frías", "Cola y Pola"),
     ("Bebidas Frías", "Corona o Stella Artois 355 ML"),
+    ("Bebidas Frías", "Poker"),
+    ("Bebidas Frías", "Águila Original"),
+    ("Bebidas Frías", "Águila Light"),
+    ("Bebidas Frías", "Cola & Pola"),
+    ("Bebidas Frías", "Corona Extra"),
+    ("Bebidas Frías", "Stella Artois"),
+    ("Bebidas Frías", "Costeñita"),
+    ("Bebidas Frías", "Budweiser"),
+    ("Bebidas Frías", "Heineken"),
+    ("Bebidas Frías", "H2Oh!"),
     ("Adiciones", "Trozos de Pollo"),
     ("Adiciones", "Trozos de Carne"),
     ("Burgers", "Hamburguesa prueba"),
@@ -159,6 +203,59 @@ def _normalizar(texto):
     texto = unicodedata.normalize("NFKD", texto or "")
     texto = "".join(caracter for caracter in texto if not unicodedata.combining(caracter))
     return "".join(caracter for caracter in texto.casefold() if caracter.isalnum())
+
+
+def _consolidar_productos_duplicados(
+    db_session,
+    productos_existentes,
+    estado_activo,
+    estado_inactivo,
+    categorias_por_id,
+):
+    cantidades_vendidas = dict(
+        db_session.query(
+            detalle_ventas.id_producto,
+            func.count(detalle_ventas.id_detalle),
+        )
+        .group_by(detalle_ventas.id_producto)
+        .all()
+    )
+    nombres_canonicos = {
+        (categoria, _normalizar(nombre)): nombre
+        for categoria, nombre, *_ in PRODUCTOS_MENU
+    }
+    nombres_canonicos.update(
+        {
+            ("Bebidas Frías", _normalizar(nombre)): nombre
+            for nombre, _, _ in BEBIDAS_CERVEZA
+        }
+    )
+    grupos = defaultdict(list)
+    for producto in productos_existentes:
+        grupos[
+            (producto.id_categoria, _normalizar(producto.nombre))
+        ].append(producto)
+
+    canonicos = []
+    for (id_categoria, nombre_normalizado), grupo in grupos.items():
+        nombre_canonico = nombres_canonicos.get(
+            (categorias_por_id.get(id_categoria, ""), nombre_normalizado)
+        )
+        producto_canonico = max(
+            grupo,
+            key=lambda producto: (
+                cantidades_vendidas.get(producto.id_producto, 0),
+                producto.id_estado == estado_activo.id_estado_producto,
+                producto.nombre == nombre_canonico,
+                producto.id_inventario is not None,
+                producto.id_producto,
+            ),
+        )
+        canonicos.append(producto_canonico)
+        for producto in grupo:
+            if producto is not producto_canonico:
+                producto.id_estado = estado_inactivo.id_estado_producto
+    return canonicos
 
 
 def sembrar_menu(db_session):
@@ -203,9 +300,16 @@ def sembrar_menu(db_session):
         categoria.id_categoria: nombre
         for nombre, categoria in categorias_por_nombre.items()
     }
+    productos_canonicos = _consolidar_productos_duplicados(
+        db_session,
+        productos_existentes,
+        estado_activo,
+        estado_inactivo,
+        categorias_por_id,
+    )
     por_categoria_y_nombre = {}
     por_nombre = {}
-    for producto in productos_existentes:
+    for producto in productos_canonicos:
         por_categoria_y_nombre.setdefault(
             (categorias_por_id.get(producto.id_categoria, ""), _normalizar(producto.nombre)),
             producto,
@@ -247,14 +351,24 @@ def sembrar_menu(db_session):
             producto.id_categoria = categoria.id_categoria
             if producto.id_estado is None:
                 producto.id_estado = estado_activo.id_estado_producto
+        por_categoria_y_nombre[clave] = producto
+        por_nombre[_normalizar(nombre)] = producto
         nombres_vigentes.add((categoria_nombre, _normalizar(nombre)))
         productos_vigentes_ids.add(producto.id_producto)
-        por_categoria_y_nombre[clave] = producto
 
     categoria_bebidas = categorias_por_nombre["Bebidas Frías"]
     for nombre, precio, descripcion in BEBIDAS_CERVEZA:
         clave = ("Bebidas Frías", _normalizar(nombre))
         producto = por_categoria_y_nombre.get(clave)
+        if producto is None:
+            producto = next(
+                (
+                    por_nombre[_normalizar(alias)]
+                    for alias in ALIASES_PRODUCTOS_CATALOGO.get(nombre, ())
+                    if _normalizar(alias) in por_nombre
+                ),
+                None,
+            )
         estado_producto = (
             estado_activo
             if precio is not None
@@ -273,25 +387,101 @@ def sembrar_menu(db_session):
             db_session.add(producto)
             db_session.flush()
             productos_existentes.append(producto)
-            por_categoria_y_nombre[clave] = producto
         else:
             producto.nombre = nombre
-            producto.precio = precio if precio is not None else 0
             producto.descripcion = descripcion
             producto.id_categoria = categoria_bebidas.id_categoria
-            producto.id_estado = estado_producto.id_estado_producto
+            if producto.id_estado is None:
+                producto.id_estado = estado_producto.id_estado_producto
+            if producto.precio <= 0:
+                producto.id_estado = estado_inactivo.id_estado_producto
+        por_categoria_y_nombre[clave] = producto
+        por_nombre[_normalizar(nombre)] = producto
+        nombres_vigentes.add(("Bebidas Frías", _normalizar(nombre)))
         productos_vigentes_ids.add(producto.id_producto)
 
-    claves_vigentes = {
-        (categoria, _normalizar(nombre))
-        for categoria, nombre, *_ in PRODUCTOS_MENU
+    inventario_por_proveedor_nombre = {
+        (id_proveedor, _normalizar(nombre)): id_inventario
+        for id_proveedor, nombre, id_inventario in db_session.query(
+            inventario.id_proveedor,
+            inventario.nombre,
+            inventario.id_inventario,
+        )
+        .filter(inventario.id_proveedor.isnot(None))
+        .all()
     }
+    articulos_agrupados_obsoletos = {
+        (nombre_proveedor.casefold(), nombre_articulo.casefold())
+        for nombre_proveedor, nombres in CATALOGO_ARTICULOS_AGRUPADOS_OBSOLETOS.items()
+        for nombre_articulo in nombres
+    }
+    articulos_proveedores = (
+        db_session.query(catalogo_proveedores, proveedores)
+        .join(proveedores, proveedores.id_proveedor == catalogo_proveedores.id_proveedor)
+        .order_by(proveedores.id_proveedor, catalogo_proveedores.id_producto_proveedor)
+        .all()
+    )
+    for articulo, proveedor in articulos_proveedores:
+        if (
+            proveedor.nombre.casefold(),
+            articulo.nombre.casefold(),
+        ) in articulos_agrupados_obsoletos:
+            continue
+        _, categoria_menu_nombre = categorias_para_suministro(
+            proveedor.que_provee
+        )
+        categoria_menu = categorias_por_nombre[categoria_menu_nombre]
+        clave = (categoria_menu_nombre, _normalizar(articulo.nombre))
+        producto = por_categoria_y_nombre.get(clave)
+        if producto is None:
+            producto = next(
+                (
+                    por_nombre[_normalizar(alias)]
+                    for alias in ALIASES_PRODUCTOS_CATALOGO.get(articulo.nombre, ())
+                    if _normalizar(alias) in por_nombre
+                ),
+                None,
+            )
+        id_inventario = inventario_por_proveedor_nombre.get(
+            (proveedor.id_proveedor, _normalizar(articulo.nombre))
+        )
+        if producto is None:
+            producto = productos(
+                nombre=articulo.nombre,
+                precio=0,
+                stock=0,
+                descripcion=articulo.detalles,
+                id_categoria=categoria_menu.id_categoria,
+                id_estado=estado_inactivo.id_estado_producto,
+                id_proveedor=None,
+                id_inventario=id_inventario,
+            )
+            db_session.add(producto)
+            db_session.flush()
+            productos_existentes.append(producto)
+        else:
+            producto.nombre = articulo.nombre
+            producto.id_categoria = categoria_menu.id_categoria
+            if articulo.detalles:
+                producto.descripcion = articulo.detalles
+            if producto.id_inventario is None:
+                producto.id_inventario = id_inventario
+            if producto.precio <= 0:
+                producto.id_estado = estado_inactivo.id_estado_producto
+        por_categoria_y_nombre[clave] = producto
+        por_nombre[_normalizar(articulo.nombre)] = producto
+        nombres_vigentes.add((categoria_menu_nombre, _normalizar(articulo.nombre)))
+        productos_vigentes_ids.add(producto.id_producto)
+
     for producto in productos_existentes:
         clave = (
             categorias_por_id.get(producto.id_categoria, ""),
             _normalizar(producto.nombre),
         )
-        if clave in claves_vigentes and producto.id_producto not in productos_vigentes_ids:
+        if (
+            clave in nombres_vigentes
+            and producto.id_producto not in productos_vigentes_ids
+        ):
             producto.id_estado = estado_inactivo.id_estado_producto
 
     for categoria_nombre, nombre in ALIASES_OBSOLETOS:

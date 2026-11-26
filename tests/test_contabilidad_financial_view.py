@@ -1,5 +1,6 @@
 import datetime as dt
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import flet as ft
@@ -8,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from database.database import Base
-from database.models import Transaction
+from database.models import Debt, Service, Transaction, rol
 from views.contabilidad import _obtener_rango_periodo, _panel_financiero
 
 
@@ -37,6 +38,7 @@ class ContabilidadFinancialViewTests(unittest.TestCase):
 
     def test_period_presets_and_custom_period_controls(self):
         hoy = dt.date(2026, 3, 18)
+        self.assertEqual(_obtener_rango_periodo("hoy", hoy), (hoy, hoy))
         self.assertEqual(
             _obtener_rango_periodo("mes_anterior", hoy),
             (dt.date(2026, 2, 1), dt.date(2026, 2, 28)),
@@ -53,6 +55,7 @@ class ContabilidadFinancialViewTests(unittest.TestCase):
             if isinstance(control, ft.Dropdown)
             and control.label == "Periodo del cálculo"
         )
+        self.assertEqual(periodo.value, "hoy")
         fechas = [
             control
             for control in controles
@@ -136,6 +139,88 @@ class ContabilidadFinancialViewTests(unittest.TestCase):
             any(texto == "$12.000" for texto in textos),
             "El total pendiente debe reflejar la transacción impaga.",
         )
+
+    def test_admin_can_mark_pending_items_paid_or_collected(self):
+        with self.session_factory() as db:
+            admin_role = rol(nombre="ADMIN")
+            db.add(admin_role)
+            db.flush()
+            role_id = admin_role.id_rol
+            db.add_all(
+                [
+                    Transaction(
+                        tipo="ingreso",
+                        monto=5000,
+                        categoria="Deuda",
+                        pagado=False,
+                    ),
+                    Transaction(
+                        tipo="gasto_fijo",
+                        monto=120000,
+                        categoria="Empanadas",
+                        pagado=False,
+                    ),
+                    Service(
+                        nombre="Internet",
+                        monto=80000,
+                        tipo="fijo",
+                        pagado=False,
+                    ),
+                    Debt(
+                        nombre="Préstamo",
+                        monto_total=500000,
+                        cuota_mensual=50000,
+                        abono_capital=40000,
+                        pago_interes=10000,
+                        pagado=False,
+                    ),
+                ]
+            )
+            db.commit()
+
+        page = MagicMock(spec=ft.Page)
+        admin = SimpleNamespace(id_rol=role_id)
+        with patch("views.contabilidad.SessionLocal", self.session_factory):
+            panel = _panel_financiero(page, usuario_actual=admin)
+
+            botones = [
+                control
+                for control in self._buscar_controles(panel, ft.TextButton)
+                if getattr(control.content, "value", control.content)
+                in {"Marcar pagado", "Marcar cobrado"}
+            ]
+            self.assertEqual(len(botones), 4)
+            self.assertEqual(
+                sum(
+                    getattr(control.content, "value", control.content)
+                    == "Marcar cobrado"
+                    for control in botones
+                ),
+                1,
+            )
+
+            for boton in botones:
+                boton.on_click(None)
+
+        with self.session_factory() as db:
+            self.assertTrue(
+                all(
+                    item.pagado
+                    for item in db.query(Transaction).all()
+                    + db.query(Service).all()
+                    + db.query(Debt).all()
+                )
+            )
+
+        textos = [
+            control.value
+            for control in self._buscar_controles(panel, ft.Text)
+            if control.value
+        ]
+        self.assertFalse(any("Por cobrar · Deuda" in texto for texto in textos))
+        self.assertFalse(any("Por pagar · Empanadas" in texto for texto in textos))
+        self.assertFalse(any("Servicio pendiente · Internet" in texto for texto in textos))
+        self.assertFalse(any("Cuota de deuda pendiente · Préstamo" in texto for texto in textos))
 
 
 if __name__ == "__main__":

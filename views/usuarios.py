@@ -3,11 +3,15 @@ import flet as ft
 from database.database import SessionLocal
 from services.usuarios_service import (
     cambiar_rol_usuario,
+    cambiar_estado_usuario,
+    crear_usuario as crear_usuario_service,
+    editar_usuario,
+    eliminar_usuario,
     listar_usuarios_para_administracion,
 )
 
 
-def usuarios_view(page: ft.Page, navbar, usuario_actual):
+def usuarios_view(page: ft.Page, navbar, usuario_actual, on_cerrar_sesion=None):
     actor_id = getattr(usuario_actual, "id_usuario", None)
     mensaje = ft.Text("", size=13)
     busqueda = ft.TextField(
@@ -58,6 +62,201 @@ def usuarios_view(page: ft.Page, navbar, usuario_actual):
             ),
         )
 
+    def mostrar_error(error):
+        mensaje.value = str(error)
+        mensaje.color = "#FF7B7B"
+
+    def guardar_usuario(registro_id, nombre, correo, contrasena, selector_rol=None):
+        db = SessionLocal()
+        try:
+            if registro_id is None:
+                crear_usuario_service(
+                    db,
+                    actor_id,
+                    nombre.value,
+                    correo.value,
+                    contrasena.value,
+                    selector_rol.value,
+                )
+            else:
+                editar_usuario(
+                    db,
+                    actor_id,
+                    registro_id,
+                    nombre.value,
+                    correo.value,
+                    contrasena.value or None,
+                )
+        except ValueError as error:
+            db.rollback()
+            mostrar_error(error)
+        except Exception as error:
+            db.rollback()
+            mensaje.value = f"No se pudo guardar el usuario: {error}"
+            mensaje.color = "#FF7B7B"
+        else:
+            page.pop_dialog()
+            mensaje.value = (
+                "Usuario creado correctamente."
+                if registro_id is None
+                else "Usuario actualizado correctamente."
+            )
+            mensaje.color = "#80C78A"
+            renderizar_usuarios()
+        finally:
+            db.close()
+        page.update()
+
+    def abrir_dialogo_usuario(registro=None):
+        nombre = ft.TextField(
+            label="Nombre",
+            value=registro["nombre"] if registro else "",
+            autofocus=True,
+        )
+        correo = ft.TextField(
+            label="Correo electrónico",
+            value=registro["correo"] if registro else "",
+        )
+        contrasena = ft.TextField(
+            label=(
+                "Nueva contraseña (opcional)"
+                if registro
+                else "Contraseña"
+            ),
+            password=True,
+            can_reveal_password=True,
+        )
+        selector_rol = None
+        campos = [nombre, correo, contrasena]
+        if registro is None:
+            selector_rol = ft.Dropdown(
+                label="Rol",
+                value="VENDEDOR",
+                options=[
+                    ft.dropdown.Option("ADMIN", "Administrador"),
+                    ft.dropdown.Option("VENDEDOR", "Trabajador / Vendedor"),
+                ],
+            )
+            campos.append(selector_rol)
+
+        dialogo = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Nuevo usuario" if registro is None else "Editar usuario"),
+            content=ft.Column(width=340, tight=True, spacing=12, controls=campos),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda _e: page.pop_dialog()),
+                ft.Button(
+                    "Guardar",
+                    icon=ft.Icons.SAVE_OUTLINED,
+                    on_click=lambda _e: guardar_usuario(
+                        registro["id_usuario"] if registro else None,
+                        nombre,
+                        correo,
+                        contrasena,
+                        selector_rol,
+                    ),
+                ),
+            ],
+        )
+        page.show_dialog(dialogo)
+
+    def confirmar_cambio_estado(registro, activar):
+        accion = "activar" if activar else "inhabilitar"
+
+        def confirmar(_evento):
+            db = SessionLocal()
+            try:
+                cambiar_estado_usuario(
+                    db,
+                    actor_id,
+                    registro["id_usuario"],
+                    activar,
+                )
+            except ValueError as error:
+                db.rollback()
+                mostrar_error(error)
+            except Exception as error:
+                db.rollback()
+                mensaje.value = f"No se pudo cambiar el estado: {error}"
+                mensaje.color = "#FF7B7B"
+            else:
+                mensaje.value = (
+                    "Usuario activado correctamente."
+                    if activar
+                    else "Usuario inhabilitado correctamente."
+                )
+                mensaje.color = "#80C78A"
+                renderizar_usuarios()
+            finally:
+                db.close()
+            page.pop_dialog()
+            page.update()
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Confirmar cambio de estado"),
+                content=ft.Text(
+                    f"¿Deseas {accion} a «{registro['nombre']}»?"
+                ),
+                actions=[
+                    ft.TextButton(
+                        "Cancelar",
+                        on_click=lambda _e: page.pop_dialog(),
+                    ),
+                    ft.Button(
+                        "Confirmar",
+                        on_click=confirmar,
+                    ),
+                ],
+            )
+        )
+
+    def confirmar_eliminacion(registro):
+        def eliminar(_evento):
+            db = SessionLocal()
+            try:
+                eliminar_usuario(db, actor_id, registro["id_usuario"])
+            except ValueError as error:
+                db.rollback()
+                mostrar_error(error)
+            except Exception as error:
+                db.rollback()
+                mensaje.value = f"No se pudo eliminar el usuario: {error}"
+                mensaje.color = "#FF7B7B"
+            else:
+                mensaje.value = "Usuario eliminado correctamente."
+                mensaje.color = "#80C78A"
+                renderizar_usuarios()
+            finally:
+                db.close()
+            page.pop_dialog()
+            page.update()
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Eliminar usuario"),
+                content=ft.Text(
+                    f"¿Deseas eliminar a «{registro['nombre']}»? "
+                    "Si tiene actividad registrada, solo podrás inhabilitarlo."
+                ),
+                actions=[
+                    ft.TextButton(
+                        "Cancelar",
+                        on_click=lambda _e: page.pop_dialog(),
+                    ),
+                    ft.Button(
+                        "Eliminar",
+                        icon=ft.Icons.DELETE_OUTLINE,
+                        bgcolor="#8A3A3A",
+                        color="white",
+                        on_click=eliminar,
+                    ),
+                ],
+            )
+        )
+
     def renderizar_usuarios():
         nonlocal usuarios_cargados
         try:
@@ -100,6 +299,8 @@ def usuarios_view(page: ft.Page, navbar, usuario_actual):
                 parte[0] for parte in nombre.split()[:2] if parte
             ).upper()
             color_rol = "#7ABAFB" if rol_actual == "ADMIN" else "#80C78A"
+            estado_actual = registro.get("estado", "ACTIVO")
+            esta_activo = estado_actual == "ACTIVO"
             etiqueta_rol = {
                 "ADMIN": "Administrador",
                 "VENDEDOR": "Vendedor",
@@ -236,10 +437,52 @@ def usuarios_view(page: ft.Page, navbar, usuario_actual):
                                             weight="bold",
                                         ),
                                     ),
+                                    ft.Container(
+                                        padding=ft.Padding.symmetric(
+                                            horizontal=10, vertical=6
+                                        ),
+                                        border_radius=20,
+                                        bgcolor="#33463A" if esta_activo else "#5A3B3B",
+                                        content=ft.Text(
+                                            "Activo" if esta_activo else "Inhabilitado",
+                                            color="#80C78A" if esta_activo else "#FFB86C",
+                                            size=11,
+                                            weight="bold",
+                                        ),
+                                    ),
                                 ],
                             ),
                             selector,
                             boton_guardar,
+                            ft.Button(
+                                "Editar",
+                                icon=ft.Icons.EDIT_OUTLINED,
+                                on_click=lambda _e, usuario=registro: (
+                                    abrir_dialogo_usuario(usuario)
+                                ),
+                            ),
+                            ft.Button(
+                                "Inhabilitar" if esta_activo else "Activar",
+                                icon=(
+                                    ft.Icons.BLOCK
+                                    if esta_activo
+                                    else ft.Icons.CHECK_CIRCLE_OUTLINE
+                                ),
+                                disabled=es_usuario_actual,
+                                on_click=lambda _e, usuario=registro, estado=esta_activo: (
+                                    confirmar_cambio_estado(usuario, not estado)
+                                ),
+                            ),
+                            ft.Button(
+                                "Eliminar",
+                                icon=ft.Icons.DELETE_OUTLINE,
+                                bgcolor="#8A3A3A",
+                                color="white",
+                                disabled=es_usuario_actual,
+                                on_click=lambda _e, usuario=registro: (
+                                    confirmar_eliminacion(usuario)
+                                ),
+                            ),
                         ],
                     ),
                 )
@@ -331,6 +574,19 @@ def usuarios_view(page: ft.Page, navbar, usuario_actual):
                                         ),
                                     ],
                                 ),
+                                *(
+                                    [
+                                        ft.Button(
+                                            "Cerrar sesión",
+                                            icon=ft.Icons.LOGOUT,
+                                            bgcolor="#8A3A3A",
+                                            color="white",
+                                            on_click=lambda _e: on_cerrar_sesion(),
+                                        )
+                                    ]
+                                    if on_cerrar_sesion
+                                    else []
+                                ),
                             ],
                         ),
                         ft.Row(
@@ -381,6 +637,13 @@ def usuarios_view(page: ft.Page, navbar, usuario_actual):
                                                     contador_resultados,
                                                 ],
                                             ),
+                                            ft.Button(
+                                                "Crear usuario",
+                                                icon=ft.Icons.PERSON_ADD_ALT_1,
+                                                bgcolor="#4A6741",
+                                                color="white",
+                                                on_click=lambda _e: abrir_dialogo_usuario(),
+                                            ),
                                             busqueda,
                                         ],
                                     ),
@@ -399,8 +662,9 @@ def usuarios_view(page: ft.Page, navbar, usuario_actual):
                                     size=16,
                                 ),
                                 ft.Text(
-                                    "No puedes cambiar tu propio rol ni quitar "
-                                    "el último administrador.",
+                                    "No puedes cambiar tu propio rol, inhabilitar "
+                                    "o eliminar tu cuenta ni quitar el último "
+                                    "administrador activo.",
                                     color="#C9CEDB",
                                     size=12,
                                 ),

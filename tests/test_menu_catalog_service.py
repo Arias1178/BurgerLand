@@ -5,8 +5,16 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from database.database import Base
-from database.models import categorias, detalle_ventas, estados_productos, productos
+from database.models import (
+    categorias,
+    detalle_ventas,
+    estados_productos,
+    inventario,
+    productos,
+)
+from services.inventario_service import sincronizar_inventario_catalogo_proveedores
 from services.menu_catalog_service import BEBIDAS_CERVEZA, sembrar_menu
+from services.proveedores_service import sembrar_catalogo_proveedores
 
 
 class MenuCatalogServiceTests(unittest.TestCase):
@@ -134,6 +142,110 @@ class MenuCatalogServiceTests(unittest.TestCase):
         self.assertIsNotNone(
             self.db.query(categorias).filter(categorias.nombre == "Mazorcadas").first()
         )
+
+    def test_seed_agrega_catalogo_de_proveedores_y_desactiva_nombres_genericos(self):
+        bebidas_frias = categorias(
+            nombre="Bebidas Frías",
+            estado="ACTIVO",
+        )
+        self.db.add(bebidas_frias)
+        self.db.flush()
+        bebida_generica = productos(
+            nombre="Bebidas 250 ml",
+            precio=3000,
+            stock=0,
+            id_categoria=bebidas_frias.id_categoria,
+            id_estado=self.activo.id_estado_producto,
+        )
+        bebida_vendida = productos(
+            nombre="Bebidas 350 ml",
+            precio=4000,
+            stock=0,
+            id_categoria=bebidas_frias.id_categoria,
+            id_estado=self.activo.id_estado_producto,
+        )
+        club_colombia_antiguo = productos(
+            nombre="Club Colombia Negra",
+            precio=4000,
+            stock=0,
+            id_categoria=bebidas_frias.id_categoria,
+            id_estado=self.activo.id_estado_producto,
+        )
+        club_colombia_actual = productos(
+            nombre="Club Colombia Negra",
+            precio=6200,
+            stock=0,
+            id_categoria=bebidas_frias.id_categoria,
+            id_estado=self.activo.id_estado_producto,
+        )
+        self.db.add_all(
+            [
+                bebida_generica,
+                bebida_vendida,
+                club_colombia_antiguo,
+                club_colombia_actual,
+            ]
+        )
+        self.db.flush()
+        detalle_generico = detalle_ventas(
+            cantidad=1,
+            precio_unitario=4000,
+            subtotal=4000,
+            id_venta=1,
+            id_producto=bebida_vendida.id_producto,
+            nombre_producto="Bebidas 350 ml",
+        )
+        self.db.add(detalle_generico)
+        self.db.commit()
+
+        sembrar_catalogo_proveedores(self.db)
+        sincronizar_inventario_catalogo_proveedores(self.db)
+        sembrar_menu(self.db)
+
+        snacks = self.db.query(categorias).filter_by(nombre="Snacks").one()
+        todo_rico = (
+            self.db.query(productos)
+            .filter(
+                productos.nombre == "Todo Rico BBQ",
+                productos.id_categoria == snacks.id_categoria,
+            )
+            .one()
+        )
+        self.assertEqual(todo_rico.precio, 0)
+        self.assertEqual(todo_rico.id_estado, self.inactivo.id_estado_producto)
+        self.assertIsNotNone(todo_rico.id_inventario)
+        self.assertIsNotNone(self.db.get(inventario, todo_rico.id_inventario))
+
+        bebida_generica = self.db.get(productos, bebida_generica.id_producto)
+        bebida_vendida = self.db.get(productos, bebida_vendida.id_producto)
+        detalle_generico = self.db.get(detalle_ventas, detalle_generico.id_detalle)
+        self.assertEqual(
+            bebida_generica.id_estado,
+            self.inactivo.id_estado_producto,
+        )
+        self.assertEqual(
+            bebida_vendida.id_estado,
+            self.inactivo.id_estado_producto,
+        )
+        self.assertEqual(detalle_generico.nombre_producto, "Bebidas 350 ml")
+
+        productos_club_colombia = (
+            self.db.query(productos)
+            .filter(
+                productos.nombre == "Club Colombia Negra",
+                productos.id_categoria == bebidas_frias.id_categoria,
+            )
+            .all()
+        )
+        activos = [
+            producto
+            for producto in productos_club_colombia
+            if producto.id_estado == self.activo.id_estado_producto
+        ]
+        self.assertEqual(len(activos), 1)
+        self.assertEqual(activos[0].precio, 6200)
+
+        self.assertEqual(sembrar_menu(self.db), sembrar_menu(self.db))
 
 
 if __name__ == "__main__":

@@ -8,18 +8,13 @@ from database.models import detalle_ventas, metodos_pago, productos, ventas
 
 
 def obtener_productos_texto(db, id_venta):
-    venta = db.query(ventas).filter(ventas.id_venta == id_venta).first()
     detalles = db.query(detalle_ventas).filter(detalle_ventas.id_venta == id_venta).all()
     partes = []
     for d in detalles:
         prod = db.query(productos).filter(productos.id_producto == d.id_producto).first()
         nombre = prod.nombre if prod else "Producto eliminado"
         partes.append(f"{nombre} x{d.cantidad}")
-    if partes:
-        return ", ".join(partes)
-    if venta and venta.proveedores_texto:
-        return f"Proveedores: {venta.proveedores_texto}"
-    return "-"
+    return ", ".join(partes) if partes else "-"
 
 
 def venta_view(page: ft.Page, navbar, on_nueva_venta):
@@ -117,7 +112,6 @@ def venta_view(page: ft.Page, navbar, on_nueva_venta):
                     ft.DataCell(ft.Text(f"${v.total:,.0f}".replace(",", "."), color="#F2C744", weight="bold")),
                     ft.DataCell(ft.Text(nombre_metodo, color="white", size=12)),
                     ft.DataCell(ft.Text(productos_texto, color="white", size=12)),
-                    ft.DataCell(ft.Text(f"${v.costo_proveedor:,.0f}".replace(",", "."), color="#F2C744", size=12, weight="bold")),
                 ]
             )
         )
@@ -180,7 +174,6 @@ def venta_view(page: ft.Page, navbar, on_nueva_venta):
                 ft.DataColumn(ft.Text("Total", color="white", weight="bold", size=13)),
                 ft.DataColumn(ft.Text("Pago", color="white", weight="bold", size=13)),
                 ft.DataColumn(ft.Text("Productos", color="white", weight="bold", size=13)),
-                ft.DataColumn(ft.Text("Proveedores", color="white", weight="bold", size=13)),
             ],
             rows=filas,
             heading_row_color="#1C1F2B",

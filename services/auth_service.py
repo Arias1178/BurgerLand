@@ -6,7 +6,7 @@ import os
 
 from sqlalchemy.orm import Session
 
-from database.models import Usuario, rol
+from database.models import Usuario, estado_usuarios, rol
 
 
 _ITERATIONS = 200_000
@@ -59,6 +59,11 @@ def authenticate_user(db: Session, correo: str, password: str):
     user = db.query(Usuario).filter(Usuario.correo == value).first()
     if not user or not verify_password(password, user.contraseña):
         return None
+
+    if user.id_estado is not None:
+        estado = db.get(estado_usuarios, user.id_estado)
+        if estado is None or estado.nombre.upper() != "ACTIVO":
+            return None
 
     if admin_alias:
         perfil = db.query(rol).filter(rol.id_rol == user.id_rol).first()

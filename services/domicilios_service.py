@@ -1,10 +1,12 @@
 import datetime
+import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from sqlalchemy.orm import Session
 
 from database.models import (
     Transaction,
+    consumo_inventario_venta,
     detalle_ventas,
     historial_domicilios,
     inventario,
@@ -13,7 +15,6 @@ from database.models import (
     productos,
     ventas,
 )
-from services.whatsapp_service import validar_numero_colombiano
 
 
 ESTADOS_DOMICILIO = (
@@ -24,6 +25,24 @@ ESTADOS_DOMICILIO = (
     "CANCELADO",
 )
 ESTADOS_DOMICILIO_ACTIVOS = ("RECIBIDO", "EN_PREPARACION", "EN_CAMINO")
+
+
+def normalizar_telefono_colombiano(numero: str) -> str:
+    if not isinstance(numero, str):
+        raise ValueError("Ingresa un número celular colombiano válido.")
+    limpio = re.sub(r"[\s().-]", "", numero.strip())
+    if limpio.startswith("+57"):
+        celular = limpio[3:]
+    elif limpio.startswith("57") and len(limpio) == 12:
+        celular = limpio[2:]
+    else:
+        celular = limpio
+    if not re.fullmatch(r"3\d{9}", celular):
+        raise ValueError(
+            "El celular debe tener 10 dígitos e iniciar en 3. "
+            "El prefijo +57 se agrega automáticamente."
+        )
+    return f"+57{celular}"
 
 
 def normalizar_datos_domicilio(datos: dict) -> dict:
@@ -38,7 +57,9 @@ def normalizar_datos_domicilio(datos: dict) -> dict:
     if not direccion:
         raise ValueError("La dirección es obligatoria para el domicilio.")
     try:
-        telefono = validar_numero_colombiano(str(datos.get("telefono") or ""))
+        telefono = normalizar_telefono_colombiano(
+            str(datos.get("telefono") or "")
+        )
     except ValueError as error:
         raise ValueError(f"El teléfono del domicilio no es válido: {error}") from error
     try:
@@ -143,19 +164,34 @@ def cambiar_estado_domicilio(
                 .filter(detalle_ventas.id_venta == venta.id_venta)
                 .all()
             )
-            for detalle in detalles:
-                inventario_id = detalle.id_inventario
-                if inventario_id is None and detalle.id_producto is not None:
-                    producto = db.get(productos, detalle.id_producto)
-                    inventario_id = producto.id_inventario if producto else None
-                if inventario_id is not None:
-                    item = db.get(inventario, inventario_id)
+            consumos = (
+                db.query(consumo_inventario_venta)
+                .filter(consumo_inventario_venta.id_venta == venta.id_venta)
+                .all()
+            )
+            if consumos:
+                for consumo in consumos:
+                    item = db.get(inventario, consumo.id_inventario)
                     if item is None:
                         raise ValueError(
                             "No se puede cancelar: falta un insumo asociado al "
                             "producto vendido."
                         )
-                    item.cantidad += detalle.cantidad
+                    item.cantidad += consumo.cantidad
+            else:
+                for detalle in detalles:
+                    inventario_id = detalle.id_inventario
+                    if inventario_id is None and detalle.id_producto is not None:
+                        producto = db.get(productos, detalle.id_producto)
+                        inventario_id = producto.id_inventario if producto else None
+                    if inventario_id is not None:
+                        item = db.get(inventario, inventario_id)
+                        if item is None:
+                            raise ValueError(
+                                "No se puede cancelar: falta un insumo asociado al "
+                                "producto vendido."
+                            )
+                        item.cantidad += detalle.cantidad
             venta.id_estado_ventas = _id_estado_venta(db, "ANULADA")
 
         venta.estado_domicilio = nuevo_estado

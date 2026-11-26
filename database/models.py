@@ -153,13 +153,9 @@ class cuentas_abiertas(Base):
     fecha_cierre = Column(DateTime, nullable=True)
     total = Column(Float, nullable=False, default=0)
     id_usuario = Column(Integer, ForeignKey("usuarios.id_usuario"), nullable=True)
-    proveedores_json = Column(Text, nullable=True)
     version = Column(Integer, nullable=False, default=1)
     modo_division = Column(String, nullable=True)
     inventario_descontado = Column(Boolean, nullable=False, default=False)
-    whatsapp_cliente = Column(String, nullable=True)
-    whatsapp_estado_envio = Column(String, nullable=True)
-    whatsapp_en_confirmar = Column(Boolean, nullable=False, default=False)
 
 class items_cuenta(Base):
     __tablename__ = "items_cuenta"
@@ -188,13 +184,9 @@ class subcuentas(Base):
     )
     etiqueta = Column(String, nullable=False)
     total = Column(Float, nullable=False, default=0)
-    costo_proveedor = Column(Float, nullable=False, default=0)
     id_metodo_pago = Column(Integer, ForeignKey("metodos_pago.id_metodos_pago"), nullable=True)
     estado = Column(String, nullable=False, default="ABIERTA", index=True)
     version = Column(Integer, nullable=False, default=1)
-    whatsapp_cliente = Column(String, nullable=True)
-    whatsapp_estado_envio = Column(String, nullable=True)
-    whatsapp_en_confirmar = Column(Boolean, nullable=False, default=False)
 
 class asignaciones_subcuenta(Base):
     __tablename__ = "asignaciones_subcuenta"
@@ -265,9 +257,6 @@ class ventas(Base):
     valor_domicilio = Column(Float, nullable=False, default=0, server_default=text("0"))
     domiciliario = Column(String, nullable=True)
     estado_domicilio = Column(String, nullable=True, index=True)
-    whatsapp_cliente = Column(String, nullable=True)
-    whatsapp_estado_envio = Column(String, nullable=True)
-    whatsapp_error = Column(Text, nullable=True)
 
 
 class historial_domicilios(Base):
@@ -382,7 +371,6 @@ class gastos(Base):
     valor = Column(Float, nullable=False)
     id_proveedor = Column(Integer, ForeignKey("proveedores.id_proveedor"), nullable=True)
     id_usuario = Column(Integer, ForeignKey("usuarios.id_usuario"), index=True, nullable=True)
-    comprobante_path = Column(String, nullable=True)
 
 
 class empleados(Base):
@@ -579,6 +567,50 @@ class inventario(Base):
     estado = Column(String, nullable=False, default="ACTIVO")
     fecha_creacion = Column(DateTime, nullable=False, default=datetime.datetime.now)
     fecha_actualizacion = Column(DateTime, nullable=False, default=datetime.datetime.now, onupdate=datetime.datetime.now)
+
+
+class receta_producto(Base):
+    __tablename__ = "recetas_productos"
+    __table_args__ = (
+        UniqueConstraint(
+            "id_producto",
+            "id_inventario",
+            "grupo_opcion",
+            "opcion",
+            name="uq_receta_producto_insumo_opcion",
+        ),
+    )
+
+    id_receta = Column(Integer, primary_key=True, index=True)
+    id_producto = Column(
+        Integer, ForeignKey("productos.id_producto"), nullable=False, index=True
+    )
+    id_inventario = Column(
+        Integer, ForeignKey("inventario.id_inventario"), nullable=False, index=True
+    )
+    cantidad = Column(Integer, nullable=False, default=1)
+    grupo_opcion = Column(String, nullable=True)
+    opcion = Column(String, nullable=True)
+
+
+class consumo_inventario_venta(Base):
+    __tablename__ = "consumos_inventario_venta"
+    __table_args__ = (
+        UniqueConstraint(
+            "id_venta",
+            "id_inventario",
+            name="uq_consumo_venta_insumo",
+        ),
+    )
+
+    id_consumo = Column(Integer, primary_key=True, index=True)
+    id_venta = Column(
+        Integer, ForeignKey("ventas.id_venta"), nullable=False, index=True
+    )
+    id_inventario = Column(
+        Integer, ForeignKey("inventario.id_inventario"), nullable=False, index=True
+    )
+    cantidad = Column(Integer, nullable=False)
 
 
 class Transaction(Base):

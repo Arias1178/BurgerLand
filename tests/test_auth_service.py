@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from database.database import Base
-from database.models import Usuario, rol
+from database.models import Usuario, estado_usuarios, rol
 from services.auth_service import authenticate_user, hash_password
 
 
@@ -22,7 +22,16 @@ class AuthServiceTests(unittest.TestCase):
 
         self.admin_role = rol(nombre="ADMIN")
         self.worker_role = rol(nombre="VENDEDOR")
-        self.db.add_all([self.admin_role, self.worker_role])
+        self.active_state = estado_usuarios(nombre="ACTIVO")
+        self.inactive_state = estado_usuarios(nombre="INACTIVO")
+        self.db.add_all(
+            [
+                self.admin_role,
+                self.worker_role,
+                self.active_state,
+                self.inactive_state,
+            ]
+        )
         self.db.commit()
         self.db.add_all([
             Usuario(
@@ -30,12 +39,14 @@ class AuthServiceTests(unittest.TestCase):
                 correo="admin@burguerland.com",
                 contraseña=hash_password("clave-admin"),
                 id_rol=self.admin_role.id_rol,
+                id_estado=self.active_state.id_estado,
             ),
             Usuario(
                 nombre="Vendedor",
                 correo="vendedor@burgerland.com",
                 contraseña=hash_password("clave-vendedor"),
                 id_rol=self.worker_role.id_rol,
+                id_estado=self.active_state.id_estado,
             ),
         ])
         self.db.commit()
@@ -66,6 +77,23 @@ class AuthServiceTests(unittest.TestCase):
 
         self.assertIsNotNone(usuario)
         self.assertEqual(usuario.correo, "admin@burguerland.com")
+
+    def test_inactive_user_cannot_authenticate(self):
+        vendedor = (
+            self.db.query(Usuario)
+            .filter(Usuario.correo == "vendedor@burgerland.com")
+            .one()
+        )
+        vendedor.id_estado = self.inactive_state.id_estado
+        self.db.commit()
+
+        self.assertIsNone(
+            authenticate_user(
+                self.db,
+                "vendedor@burgerland.com",
+                "clave-vendedor",
+            )
+        )
 
 
 if __name__ == "__main__":

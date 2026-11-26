@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from database.database import Base
-from database.models import Usuario, rol
+from database.models import Usuario, estado_usuarios, rol
 from views.navbar import construir_navbar
 from views.usuarios import usuarios_view
 
@@ -24,14 +24,20 @@ class UsuariosViewTests(unittest.TestCase):
         with self.session_factory() as db:
             admin_role = rol(nombre="ADMIN")
             worker_role = rol(nombre="VENDEDOR")
-            db.add_all([admin_role, worker_role])
+            active_state = estado_usuarios(nombre="ACTIVO")
+            inactive_state = estado_usuarios(nombre="INACTIVO")
+            db.add_all([admin_role, worker_role, active_state, inactive_state])
             db.flush()
             self.admin = Usuario(
                 nombre="Admin",
                 correo="admin@burgerland.test",
                 contraseña="hash",
                 id_rol=admin_role.id_rol,
+                id_estado=active_state.id_estado,
             )
+            self.worker_role_id = worker_role.id_rol
+            self.active_state_id = active_state.id_estado
+            self.inactive_state_id = inactive_state.id_estado
             db.add(self.admin)
             db.commit()
             self.admin_id = self.admin.id_usuario
@@ -110,6 +116,112 @@ class UsuariosViewTests(unittest.TestCase):
         ]
         self.assertIn("0 de 1 usuarios", textos)
         self.assertIn("No encontramos usuarios", textos)
+
+    def test_admin_can_create_disable_user_and_logout(self):
+        page = MagicMock(spec=ft.Page)
+        on_logout = MagicMock()
+        with patch("views.usuarios.SessionLocal", self.session_factory):
+            view = usuarios_view(
+                page,
+                ft.Container(),
+                Usuario(
+                    id_usuario=self.admin_id,
+                    id_rol=1,
+                    nombre="Admin",
+                    correo="admin@burgerland.test",
+                    contraseña="hash",
+                ),
+                on_cerrar_sesion=on_logout,
+            )
+
+            def label(control):
+                content = getattr(control, "content", None)
+                return getattr(content, "value", content)
+
+            crear = next(
+                control
+                for control in self._buscar_controles(view, ft.Button)
+                if label(control) == "Crear usuario"
+            )
+            crear.on_click(None)
+            dialogo = page.show_dialog.call_args.args[0]
+            campos = list(self._buscar_controles(dialogo.content, ft.TextField))
+            next(campo for campo in campos if campo.label == "Nombre").value = "Vendedor"
+            next(
+                campo
+                for campo in campos
+                if campo.label == "Correo electrónico"
+            ).value = "vendedor@burgerland.test"
+            next(
+                campo for campo in campos if campo.label == "Contraseña"
+            ).value = "clave-vendedor"
+            dialogo.actions[-1].on_click(None)
+
+            with self.session_factory() as db:
+                vendedor = (
+                    db.query(Usuario)
+                    .filter_by(correo="vendedor@burgerland.test")
+                    .one()
+                )
+                vendedor_id = vendedor.id_usuario
+                self.assertEqual(vendedor.id_rol, self.worker_role_id)
+                self.assertEqual(vendedor.id_estado, self.active_state_id)
+
+            editar = [
+                control
+                for control in self._buscar_controles(view, ft.Button)
+                if label(control) == "Editar"
+            ][1]
+            editar.on_click(None)
+            dialogo = page.show_dialog.call_args.args[0]
+            campos = list(self._buscar_controles(dialogo.content, ft.TextField))
+            next(campo for campo in campos if campo.label == "Nombre").value = (
+                "Vendedor Editado"
+            )
+            next(
+                campo
+                for campo in campos
+                if campo.label == "Correo electrónico"
+            ).value = "editado@burgerland.test"
+            dialogo.actions[-1].on_click(None)
+
+            with self.session_factory() as db:
+                vendedor = db.get(Usuario, vendedor_id)
+                self.assertEqual(vendedor.nombre, "Vendedor Editado")
+                self.assertEqual(vendedor.correo, "editado@burgerland.test")
+
+            inhabilitar = next(
+                control
+                for control in self._buscar_controles(view, ft.Button)
+                if label(control) == "Inhabilitar" and not control.disabled
+            )
+            inhabilitar.on_click(None)
+            confirmacion = page.show_dialog.call_args.args[0]
+            confirmacion.actions[-1].on_click(None)
+
+            with self.session_factory() as db:
+                vendedor = db.get(Usuario, vendedor_id)
+                self.assertEqual(vendedor.id_estado, self.inactive_state_id)
+
+            eliminar = next(
+                control
+                for control in self._buscar_controles(view, ft.Button)
+                if label(control) == "Eliminar" and not control.disabled
+            )
+            eliminar.on_click(None)
+            confirmacion = page.show_dialog.call_args.args[0]
+            confirmacion.actions[-1].on_click(None)
+            with self.session_factory() as db:
+                self.assertIsNone(db.get(Usuario, vendedor_id))
+
+            cerrar_sesion = next(
+                control
+                for control in self._buscar_controles(view, ft.Button)
+                if label(control) == "Cerrar sesión"
+            )
+            cerrar_sesion.on_click(None)
+
+        on_logout.assert_called_once_with()
 
 
 if __name__ == "__main__":

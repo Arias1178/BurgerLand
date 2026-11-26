@@ -1490,6 +1490,8 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
     contabilidad = _obtener_resumen_contabilidad()
 
     hoy = dt.date.today()
+    negocio_hoy = _obtener_analisis_negocio(hoy, hoy)
+    contabilidad_hoy = _obtener_resumen_contabilidad_periodo(hoy, hoy)
     quincenal_disponible = informe_quincenal_habilitado(hoy)
     comparativo_negocio = None
     comparativo_contabilidad = None
@@ -1548,6 +1550,46 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
             _tarjeta_resumen("Egresos", _formatear_pesos(contabilidad["gastos_fijos"] + contabilidad["costos_variables"] + contabilidad["gastos_financieros"]), "#FF7B7B"),
             _tarjeta_resumen("Utilidad neta", _formatear_pesos(contabilidad["utilidad_neta"]), "#F2C744"),
         ],
+    )
+
+    resumen_diario = ft.Container(
+        bgcolor="#2E3344",
+        border_radius=20,
+        padding=24,
+        border=ft.Border.all(1.5, "#7AE582"),
+        content=ft.Column(
+            spacing=14,
+            controls=[
+                ft.Text("VENTAS Y CONTABILIDAD DE HOY", size=22, weight="bold", color="white"),
+                ft.Text(
+                    f"Solo incluye movimientos del {hoy.strftime('%d/%m/%Y')}; "
+                    "los reportes históricos se muestran por separado.",
+                    size=14,
+                    color="#C9CEDB",
+                ),
+                ft.Row(
+                    wrap=True,
+                    spacing=18,
+                    run_spacing=18,
+                    controls=[
+                        _tarjeta_resumen("Ventas del día", _formatear_pesos(negocio_hoy["total_ventas"]), "#F2C744"),
+                        _tarjeta_resumen("Pedidos del día", str(negocio_hoy["cantidad_ventas"]), "#7ABAFB"),
+                        _tarjeta_resumen("Unidades vendidas", str(negocio_hoy["total_unidades"]), "#7AE582"),
+                        _tarjeta_resumen("Ingresos del día", _formatear_pesos(contabilidad_hoy["ingresos"]), "#7AE582"),
+                        _tarjeta_resumen(
+                            "Egresos del día",
+                            _formatear_pesos(
+                                contabilidad_hoy["costos_variables"]
+                                + contabilidad_hoy["gastos_fijos"]
+                                + contabilidad_hoy["gastos_financieros"]
+                            ),
+                            "#FF7B7B",
+                        ),
+                        _tarjeta_resumen("Utilidad neta del día", _formatear_pesos(contabilidad_hoy["utilidad_neta"]), "#F2C744"),
+                    ],
+                ),
+            ],
+        ),
     )
 
     negocio_card = ft.Container(
@@ -1755,6 +1797,7 @@ def informes_view(page: ft.Page, navbar, ultimo_informe=None):
         controls=[
             navbar,
             ft.Text("REPORTES Y ESTADÍSTICAS", size=28, weight="bold", color="white"),
+            resumen_diario,
             negocio_card,
             contabilidad_card,
             comparativo_card,

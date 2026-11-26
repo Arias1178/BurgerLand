@@ -81,17 +81,27 @@ parte del flujo de cierre conectado a la interfaz actual.
 ### Menú, inventario, proveedores y compras
 
 - Administrar secciones y productos del menú.
-- Asociar productos del menú con insumos y descontar inventario al vender.
+- Asociar productos del menú con recetas de varios insumos y descontar cada
+  ingrediente al vender. Un administrador puede revisar o ajustar las cantidades
+  desde **Receta** en la tarjeta del producto.
+- Al iniciar, crear proveedores genéricos editables, vincular a su catálogo los
+  insumos/categorías que ofrecen y preparar las recetas del menú. Las existencias
+  iniciales quedan en cero; registra una compra antes de vender platos que
+  requieran esos insumos. Las cantidades de receta iniciales son estimadas y
+  deben verificarse con las porciones reales.
 - Administrar categorías, cantidades, unidades, costos y niveles mínimos de
   inventario.
 - Mantener proveedores y su catálogo de suministros.
+- Sincronizar los artículos del catálogo de proveedores con inventario y
+  secciones del menú. Los artículos sin precio de venta se crean inactivos
+  hasta que un administrador configure su precio.
 - Registrar compras y sus líneas; estas aumentan la cantidad y actualizan el
   costo promedio del insumo en inventario.
 - El menú de productos y el inventario de insumos son catálogos diferentes.
   Registrar una compra actualiza inventario, no los productos del menú.
 - La sección **Compras** está disponible para usuarios ADMIN.
 
-### Domicilios y comprobantes
+### Domicilios
 
 En una venta a domicilio se pueden guardar los datos de entrega, cliente,
 teléfono, barrio o referencia, costo de envío y domiciliario opcional. El costo
@@ -99,25 +109,6 @@ de envío se suma a la venta y al movimiento de caja. En **Historial** se pueden
 consultar pedidos y actualizar su estado. Una cancelación pide el motivo,
 revierte las unidades vendidas y registra el reembolso; un pago no efectivo
 queda pendiente de devolución por su canal original.
-
-Los comprobantes por WhatsApp admiten celulares colombianos de 10 dígitos que
-inicien en 3. El proveedor `wa_me` abre WhatsApp con el mensaje preparado y el
-cliente debe enviarlo. También existe un proveedor opcional de WhatsApp Business
-Cloud API, que envía el comprobante PDF y un mensaje de texto. Configura estas
-variables antes de iniciar la aplicación para usarlo:
-
-```text
-WHATSAPP_PROVIDER=cloud_api
-WHATSAPP_ACCESS_TOKEN=<token de WhatsApp Business Cloud API>
-WHATSAPP_PHONE_NUMBER_ID=<identificador del número de empresa>
-WHATSAPP_GRAPH_API_VERSION=<versión de Graph API habilitada en Meta>
-BUSINESS_NAME=BurgerLand
-```
-
-Sin esas variables se usa `wa_me`. No guardes tokens en el código ni en el
-repositorio. El estado queda pendiente hasta que el proveedor confirme el envío.
-Los comprobantes de venta no son facturas electrónicas DIAN; la interfaz
-`FacturaElectronicaProvider` no emite facturas.
 
 ### Informes y contabilidad
 
@@ -155,5 +146,5 @@ Para validar áreas específicas:
 python -m unittest tests.test_auth_service
 python -m unittest tests.test_contabilidad_service tests.test_financial_engine tests.test_contabilidad_financial_view
 python -m unittest tests.test_mesa_service tests.test_venta_service tests.test_cuenta_service
-python -m unittest tests.test_whatsapp_service tests.test_cuenta_service
+python -m unittest tests.test_cuenta_service
 ```

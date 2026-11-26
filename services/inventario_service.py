@@ -13,6 +13,10 @@ from database.models import (
     catalogo_proveedores,
     proveedores,
 )
+from services.proveedores_service import (
+    CATALOGO_ARTICULOS_AGRUPADOS_OBSOLETOS,
+    categorias_para_suministro,
+)
 
 
 def sincronizar_categorias_inventario(db_session: Session):
@@ -29,15 +33,22 @@ def sincronizar_categorias_inventario(db_session: Session):
         db_session.add(categorias_inventario(nombre=nombre))
 
 
-def sincronizar_inventario_catalogo_bebidas(db_session: Session) -> int:
-    """Create one zero-stock inventory SKU for each catalog item supplied as a beverage."""
+def sincronizar_inventario_catalogo_proveedores(db_session: Session) -> int:
+    """Create one zero-stock inventory SKU for each individual supplier catalog item."""
     catalogo = (
         db_session.query(catalogo_proveedores, proveedores)
         .join(proveedores, proveedores.id_proveedor == catalogo_proveedores.id_proveedor)
-        .filter(func.lower(func.trim(proveedores.que_provee)) == "bebidas")
         .order_by(proveedores.id_proveedor, catalogo_proveedores.id_producto_proveedor)
         .all()
     )
+    articulos_agrupados_obsoletos = {
+        (
+            nombre_proveedor.casefold(),
+            nombre_articulo.casefold(),
+        )
+        for nombre_proveedor, nombres in CATALOGO_ARTICULOS_AGRUPADOS_OBSOLETOS.items()
+        for nombre_articulo in nombres
+    }
     existentes = {
         (id_proveedor, _normalizar_nombre(nombre))
         for id_proveedor, nombre in db_session.query(
@@ -49,13 +60,21 @@ def sincronizar_inventario_catalogo_bebidas(db_session: Session) -> int:
     }
     creados = 0
     for articulo, proveedor in catalogo:
+        if (
+            proveedor.nombre.casefold(),
+            articulo.nombre.casefold(),
+        ) in articulos_agrupados_obsoletos:
+            continue
         clave = (proveedor.id_proveedor, _normalizar_nombre(articulo.nombre))
         if clave in existentes:
             continue
+        categoria_inventario, _ = categorias_para_suministro(
+            proveedor.que_provee
+        )
         db_session.add(
             inventario(
                 nombre=articulo.nombre.strip(),
-                categoria="Bebidas",
+                categoria=categoria_inventario,
                 unidad_medida="unidad",
                 cantidad=0,
                 stock_minimo=0,

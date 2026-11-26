@@ -6,7 +6,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from database.database import Base
-from database.models import detalle_ventas, inventario, productos
+from database.models import (
+    consumo_inventario_venta,
+    detalle_ventas,
+    inventario,
+    productos,
+    receta_producto,
+)
 from services.venta_service import registrar_venta
 
 
@@ -287,6 +293,100 @@ class VentaInventarioVinculadoTests(unittest.TestCase):
 
         self.assertEqual(self.session.get(inventario, item.id_inventario).cantidad, 4)
         self.assertEqual(producto.id_inventario, item.id_inventario)
+
+    def test_venta_descuenta_ingredientes_de_receta_y_respeta_opcion_de_carne(self):
+        pan = inventario(
+            nombre="Pan de hamburguesa",
+            categoria="Panadería",
+            unidad_medida="unidad",
+            cantidad=5,
+            stock_minimo=0,
+            costo_unitario=0,
+            estado="ACTIVO",
+        )
+        carne = inventario(
+            nombre="Carne para receta",
+            categoria="Carnes",
+            unidad_medida="g",
+            cantidad=700,
+            stock_minimo=0,
+            costo_unitario=0,
+            estado="ACTIVO",
+        )
+        koller = inventario(
+            nombre="Koller para receta",
+            categoria="Carnes",
+            unidad_medida="g",
+            cantidad=700,
+            stock_minimo=0,
+            costo_unitario=0,
+            estado="ACTIVO",
+        )
+        arepa = inventario(
+            nombre="Arepa de maíz",
+            categoria="Panadería",
+            unidad_medida="unidad",
+            cantidad=5,
+            stock_minimo=0,
+            costo_unitario=0,
+            estado="ACTIVO",
+        )
+        producto = productos(nombre="Burger receta", precio=10000, stock=0)
+        self.session.add_all([pan, carne, koller, arepa, producto])
+        self.session.flush()
+        self.session.add_all(
+            [
+                receta_producto(
+                    id_producto=producto.id_producto,
+                    id_inventario=pan.id_inventario,
+                    cantidad=1,
+                ),
+                receta_producto(
+                    id_producto=producto.id_producto,
+                    id_inventario=carne.id_inventario,
+                    cantidad=140,
+                    grupo_opcion="proteina_burger",
+                    opcion="Carne de la casa (140 g, 100 % res)",
+                ),
+                receta_producto(
+                    id_producto=producto.id_producto,
+                    id_inventario=koller.id_inventario,
+                    cantidad=140,
+                    grupo_opcion="proteina_burger",
+                    opcion="Koller",
+                ),
+            ]
+        )
+        self.session.commit()
+
+        registrar_venta(
+            self.session,
+            [{
+                "id_producto": producto.id_producto,
+                "nombre": producto.nombre,
+                "precio": producto.precio,
+                "cantidad": 2,
+                "personalizacion": "carne: Koller; arepa artesanal (+$1.000)",
+            }],
+            metodo_id=1,
+            caja_actual=self.caja,
+        )
+
+        self.assertEqual(self.session.get(inventario, pan.id_inventario).cantidad, 5)
+        self.assertEqual(self.session.get(inventario, carne.id_inventario).cantidad, 700)
+        self.assertEqual(self.session.get(inventario, koller.id_inventario).cantidad, 420)
+        self.assertEqual(self.session.get(inventario, arepa.id_inventario).cantidad, 3)
+        consumos = {
+            consumo.id_inventario: consumo.cantidad
+            for consumo in self.session.query(consumo_inventario_venta).all()
+        }
+        self.assertEqual(
+            consumos,
+            {
+                koller.id_inventario: 280,
+                arepa.id_inventario: 2,
+            },
+        )
 
 
 if __name__ == "__main__":

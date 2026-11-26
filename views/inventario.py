@@ -132,7 +132,67 @@ def inventario_view(page: ft.Page, navbar, usuario_actual=None):
                     content=ft.Column(tight=True, scroll="auto", controls=controles),
                 ),
                 actions=[
+                    ft.TextButton(
+                        "Crear categoría",
+                        on_click=lambda e: abrir_formulario_categoria(),
+                    ),
                     ft.TextButton("Cerrar", on_click=lambda e: page.pop_dialog()),
+                ],
+            )
+        )
+
+    def abrir_formulario_categoria():
+        page.pop_dialog()
+        nombre = ft.TextField(label="Nombre de la categoría", autofocus=True)
+        mensaje = ft.Text("", color="#FF7B7B", size=12)
+
+        def crear_categoria(e):
+            nombre_categoria = (nombre.value or "").strip()
+            if not nombre_categoria:
+                mensaje.value = "El nombre de la categoría es obligatorio."
+                page.update()
+                return
+
+            db = SessionLocal()
+            try:
+                existentes = db.query(categorias_inventario.nombre).all()
+                if any(
+                    actual.strip().casefold() == nombre_categoria.casefold()
+                    for actual, in existentes
+                ):
+                    mensaje.value = "Ya existe una categoría con ese nombre."
+                    page.update()
+                    return
+
+                db.add(
+                    categorias_inventario(
+                        nombre=nombre_categoria,
+                        estado="ACTIVO",
+                    )
+                )
+                db.commit()
+            finally:
+                db.close()
+
+            page.pop_dialog()
+            refrescar()
+            abrir_gestion_categorias()
+
+        def cancelar_creacion(e):
+            page.pop_dialog()
+            abrir_gestion_categorias()
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Crear categoría de inventario"),
+                content=ft.Column(
+                    tight=True,
+                    controls=[nombre, mensaje],
+                ),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=cancelar_creacion),
+                    ft.TextButton("Crear", on_click=crear_categoria),
                 ],
             )
         )

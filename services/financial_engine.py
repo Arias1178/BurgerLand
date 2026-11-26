@@ -74,6 +74,8 @@ class PendingItem:
     tipo: str
     monto: Decimal
     fecha: dt.date | None
+    origen: str | None = None
+    registro_id: int | None = None
 
 
 class FinancialEngine:
@@ -225,6 +227,8 @@ class FinancialEngine:
                     ),
                     monto=_decimal(item.monto),
                     fecha=fecha.date() if isinstance(fecha, dt.datetime) else fecha,
+                    origen="transaccion",
+                    registro_id=item.id,
                 )
             )
         for item in self.services:
@@ -241,6 +245,8 @@ class FinancialEngine:
                     tipo="Servicio pendiente",
                     monto=_decimal(item.monto),
                     fecha=fecha.date() if isinstance(fecha, dt.datetime) else fecha,
+                    origen="servicio",
+                    registro_id=item.id,
                 )
             )
         for item in self.debts:
@@ -260,6 +266,8 @@ class FinancialEngine:
                     tipo="Cuota de deuda pendiente",
                     monto=cuota,
                     fecha=fecha.date() if isinstance(fecha, dt.datetime) else fecha,
+                    origen="deuda",
+                    registro_id=item.id,
                 )
             )
 

@@ -1,6 +1,4 @@
-import asyncio
 import datetime
-import os
 
 import flet as ft
 
@@ -18,15 +16,6 @@ from services.domicilios_service import (
     listar_domicilios_activos,
 )
 from services.historial_service import buscar_ventas_historial
-from services.whatsapp_service import (
-    ESTADO_ENVIADO,
-    ESTADO_ERROR,
-    ESTADO_PENDIENTE,
-    actualizar_estado_envio_venta,
-    enviar_comprobante,
-    generar_comprobante_pdf,
-    generar_mensaje_comprobante,
-)
 
 
 def obtener_productos_texto(db, id_venta):
@@ -50,7 +39,7 @@ def _badge(texto, color):
     )
 
 
-def _crear_tarjeta_venta(page, db, venta):
+def _crear_tarjeta_venta(db, venta):
     metodo = db.query(metodos_pago).filter(metodos_pago.id_metodos_pago == venta.id_metodos_pagos).first()
     usuario = db.query(Usuario).filter(Usuario.id_usuario == venta.id_usuario).first()
     productos_texto = obtener_productos_texto(db, venta.id_venta)
@@ -65,131 +54,6 @@ def _crear_tarjeta_venta(page, db, venta):
         if tipo_pedido == "DOMICILIO"
         else "Mostrador"
     )
-    whatsapp_estado = ft.Text(
-        (
-            f"WhatsApp: {venta.whatsapp_estado_envio}"
-            if venta.whatsapp_cliente
-            else "WhatsApp: Sin número"
-        ),
-        color="#FFB86C" if venta.whatsapp_estado_envio != ESTADO_ENVIADO else "#80C78A",
-        size=12,
-    )
-    btn_whatsapp = ft.Button(
-        "Enviar comprobante",
-        bgcolor="#2E7D5B",
-        color="white",
-        visible=bool(
-            venta.whatsapp_cliente
-            and venta.whatsapp_estado_envio != ESTADO_ENVIADO
-        ),
-    )
-
-    async def reintentar_envio(_evento):
-        if not venta.whatsapp_cliente:
-            return
-        detalles = (
-            db.query(detalle_ventas)
-            .filter(detalle_ventas.id_venta == venta.id_venta)
-            .order_by(detalle_ventas.id_detalle)
-            .all()
-        )
-        items = []
-        for detalle in detalles:
-            producto = (
-                db.get(productos, detalle.id_producto)
-                if detalle.id_producto is not None
-                else None
-            )
-            items.append(
-                {
-                    "nombre": detalle.nombre_producto
-                    or (producto.nombre if producto else "Producto"),
-                    "cantidad": detalle.cantidad,
-                    "precio": detalle.precio_unitario,
-                    "personalizacion": detalle.personalizacion,
-                }
-            )
-        mesa = db.get(mesas, venta.id_mesa) if venta.id_mesa is not None else None
-        destino = f"Mesa {mesa.numero}" if mesa else "Para llevar / Mostrador"
-        mensaje = generar_mensaje_comprobante(
-            negocio=os.environ.get("BUSINESS_NAME", "BurgerLand").strip()
-            or "BurgerLand",
-            consecutivo=str(venta.id_venta),
-            fecha_hora=venta.fecha_hora,
-            mesa=destino,
-            items=items,
-            subtotal=float(venta.total),
-            total=float(venta.total),
-            metodo_pago=metodo.nombre if metodo else "No disponible",
-        )
-        pdf_bytes = None
-        if os.environ.get("WHATSAPP_PROVIDER", "wa_me").strip().lower() == "cloud_api":
-            pdf_bytes = generar_comprobante_pdf(
-                negocio=os.environ.get("BUSINESS_NAME", "BurgerLand").strip()
-                or "BurgerLand",
-                consecutivo=str(venta.id_venta),
-                fecha_hora=venta.fecha_hora,
-                mesa=destino,
-                items=items,
-                subtotal=float(venta.total),
-                total=float(venta.total),
-                metodo_pago=metodo.nombre if metodo else "No disponible",
-            )
-        try:
-            resultado = await asyncio.to_thread(
-                enviar_comprobante,
-                venta.whatsapp_cliente,
-                mensaje,
-                pdf_bytes,
-                f"comprobante-{venta.id_venta}.pdf",
-            )
-            if resultado.url:
-                page.launch_url(resultado.url)
-            actualizar_estado_envio_venta(
-                db,
-                venta.id_venta,
-                resultado.estado,
-            )
-            whatsapp_estado.value = f"WhatsApp: {resultado.estado}"
-            whatsapp_estado.color = (
-                "#FFB86C"
-                if resultado.estado == ESTADO_PENDIENTE
-                else "#80C78A"
-            )
-            btn_whatsapp.text = (
-                "Enviar comprobante"
-                if resultado.estado == ESTADO_PENDIENTE
-                else "Comprobante enviado"
-            )
-            btn_whatsapp.visible = resultado.estado != ESTADO_ENVIADO
-        except Exception as error:
-            actualizar_estado_envio_venta(
-                db,
-                venta.id_venta,
-                ESTADO_ERROR,
-                str(error),
-            )
-            whatsapp_estado.value = "WhatsApp: ERROR"
-            whatsapp_estado.color = "#FF7B7B"
-            page.show_dialog(
-                ft.AlertDialog(
-                    modal=True,
-                    title=ft.Text("No se pudo enviar el comprobante"),
-                    content=ft.Text(
-                        f"{error}\nLa venta se conserva y puedes volver a intentar."
-                    ),
-                    actions=[
-                        ft.TextButton(
-                            "Cerrar",
-                            on_click=lambda _e: page.pop_dialog(),
-                        )
-                    ],
-                )
-            )
-        page.update()
-
-    btn_whatsapp.on_click = reintentar_envio
-
     return ft.Container(
         border_radius=16,
         padding=16,
@@ -267,22 +131,6 @@ def _crear_tarjeta_venta(page, db, venta):
                     max_lines=2,
                     overflow=ft.TextOverflow.ELLIPSIS,
                 ),
-                *(
-                    [
-                        ft.Text(
-                            f"Error de WhatsApp: {venta.whatsapp_error}",
-                            color="#FF7B7B",
-                            size=12,
-                        )
-                    ]
-                    if venta.whatsapp_estado_envio == ESTADO_ERROR
-                    and venta.whatsapp_error
-                    else []
-                ),
-                ft.Row(
-                    controls=[whatsapp_estado, btn_whatsapp],
-                    wrap=True,
-                ),
             ],
         ),
     )
@@ -299,7 +147,7 @@ def _crear_lista_ventas(page, ventas_lista, db):
     return ft.Column(
         spacing=12,
         scroll="auto",
-        controls=[_crear_tarjeta_venta(page, db, venta) for venta in ventas_lista],
+        controls=[_crear_tarjeta_venta(db, venta) for venta in ventas_lista],
     )
 
 
@@ -587,7 +435,7 @@ def historial_view(page: ft.Page, navbar, usuario_actual=None):
                     pagina=numero_pagina,
                 )
                 lista_ventas.controls = [
-                    _crear_tarjeta_venta(page, db_local, venta)
+                    _crear_tarjeta_venta(db_local, venta)
                     for venta in resultado["ventas"]
                 ] or [
                     ft.Container(
